@@ -1,0 +1,1028 @@
+import numpy as np
+import cv2
+import PIL.Image as Im
+import PIL
+from PIL import EpsImagePlugin
+EpsImagePlugin.gs_windows_binary =r'C:\Program Files\LyX 2.3\ghostscript\bin\gswin64.exe' 
+
+N=7
+F=15
+gamma=0.98
+g=1./gamma
+nz=0.05#0.045#0.055#0.06#0.03#0.065#0.05#
+Na=9
+beta=2.
+miop=0
+
+uload=0
+usafe=1
+uvideo=1
+urecload=0
+pref="dp2_zformedcommonW_mouselab_bottleneck_fulltank "   #form,food,v
+pref+="N"+str(N)+"F"+str(F)+"beta"+str(beta)+"miop"+str(miop)+"nz"+str(nz)
+
+steps=2001
+
+food=np.zeros((N,N),int)
+form=np.zeros((2,N,N),int)
+form+=1
+
+form[0,:,0:3]=0
+form[0,N//2:N//2+1,2]=1
+form[0,N//2-1:(N+1)//2+1,0:2]=1
+form[1,:,0:3]=0
+form[0,2,4:6]=0
+form[1,2,4:6]=0
+
+food[N-1,N//2]=F
+
+food=food*form[0]			
+
+def stopos(s):
+    f=s//N**4
+    s=s%N**4
+    s1=s//(N**2)
+    s2=s%(N**2)
+    a=np.zeros(5, int)
+    a[0]=f
+    a[1]=s1//N
+    a[2]=s1%N
+    a[3]=s2//N
+    a[4]=s2%N
+    return a
+
+def postos(a):
+    s=(N*a[1]+a[2])*N**2+(N*a[3]+a[4])+a[0]*N**4
+    return s
+
+def ifa(s,a,ind):
+	pos=stopos(s)
+	pos[ind]+=a//3-1
+	pos[ind+1]+=a%3-1
+	w=0
+	if (pos[ind]<N) and (pos[ind]>=0) and (pos[ind+1]<N) and (pos[ind+1]>=0):
+		if (form[(ind-1)//2,pos[ind],pos[ind+1]]==1): 
+			w=1
+	return w
+
+def q0(i,j):
+	if (i==j):
+		return -1
+	else:
+		return 0.
+
+def news(s,a):
+    pos=stopos(s)
+    dpos2=np.zeros((2))
+    if (pos[0]==-1) or ((pos[1]==pos[3]) and (pos[2]==pos[4])):
+        pos[0]=-1
+    else:
+        pos[0]=pos[0]-1+food[pos[1],pos[2]]
+        if (pos[0]>=F):
+                pos[0]=F-1
+        if (pos[0]>=0):
+            pos[1]=(pos[1]+a//3-1)#%N
+            pos[2]=(pos[2]+a%3-1)#%N
+            if pos[1]<0:
+                pos[1]=0
+            if pos[1]>N-1:
+                pos[1]=N-1
+            if pos[2]<0:
+                pos[2]=0
+            if pos[2]>N-1:
+                pos[2]=N-1
+    dpos2[0]=int(np.random.rand()*3.)-1
+    dpos2[1]=int(np.random.rand()*3.)-1
+    pos[3]=(pos[3]+dpos2[0])#%N
+    pos[4]=(pos[4]+dpos2[1])#%N
+    if pos[3]<0:
+        pos[3]=0
+    if pos[3]>N-1:
+        pos[3]=N-1
+    if pos[4]<0:
+        pos[4]=0
+    if pos[4]>N-1:
+        pos[4]=N-1
+    s1=postos(pos)
+    return s1
+
+
+def nexts(s,a):
+    pos=stopos(s)
+    pos0=np.zeros((5), int)
+    for i in range(5):
+        pos0[i]=pos[i]
+    lists=[]
+    listp=[]
+    if (pos[0]==-1) or ((pos[1]==pos[3]) and (pos[2]==pos[4])):
+        pos[0]=-1
+    else:
+        pos[0]=pos[0]-1+food[pos[1],pos[2]]
+        if (pos[0]>=F):
+            pos[0]=F-1
+        if (pos[0]>=0):
+            pos[1]=(pos[1]+a//3-1)#%N
+            pos[2]=(pos[2]+a%3-1)#%N
+            if pos[1]<0:
+                pos[1]=0
+            if pos[1]>N-1:
+                pos[1]=N-1
+            if pos[2]<0:
+                pos[2]=0
+            if pos[2]>N-1:
+                pos[2]=N-1
+    pos1=np.zeros((5), int)
+    for i in range(5):
+        pos1[i]=pos[i]
+    for a2 in range(9):
+        if (ifa(s,a2,3)==1):
+           pos1[3]=(pos[3]+a2//3-1)#%N
+           pos1[4]=(pos[4]+a2%3-1)#%N
+           lists.append(postos(pos1))
+           listp.append(wp[pos0[1]*N+pos0[2],pos0[3]*N+pos0[4],pos1[3]*N+pos1[4] ])
+    return lists,listp
+
+def W01(pos,pos1):
+    w=0
+    if (pos[0]==0) and (pos!=pos1):
+        w=0
+    else:
+        if (pos[0]-1+food[pos[1],pos[2]]==pos1[0]) and (abs(pos[1]-pos1[1])<=1) and (abs(pos[2]-pos1[2])<=1):
+            w=1
+    return w
+
+def W2(pos,pos1):
+    w=0
+    if (abs(pos[1]-pos1[1])<2) and (abs(pos[2]-pos1[2])<2):
+            w=1
+    return w
+
+def Wnum(pos,pos1):
+    w=0
+    if (abs(pos//N-pos1//N)<2) and (abs(pos%N-pos1%N)<2) and (form[0,pos1//N,pos1%N]==1) and (form[0,pos//N,pos%N]==1):
+            w=1
+    return w
+
+def Wnum2(pos,pos1):
+    w=0
+    if (abs(pos//N-pos1//N)<2) and (abs(pos%N-pos1%N)<2) and (form[1,pos1//N,pos1%N]==1) and (form[1,pos//N,pos%N]==1):
+            w=1
+    return w
+
+def Wp(pos1,pos2):
+	wp=np.zeros((3,3))
+	l=np.sqrt((pos1//N-pos2//N)**2+(pos1%N-pos2%N)**2)
+	if (l>0):
+		for i in range(3):
+			for j in range(3):
+				wp[i,j]=(i-1)*(pos1//N-pos2//N)+(j-1)*(pos1%N-pos2%N)
+				if (abs(i-1)==1) and (abs(j-1)==1):
+					wp[i,j]*=1./np.sqrt(2)
+		wp*=1./l
+		if (miop==1):
+			if (l>1):
+				wp*=1./l
+	wpmax=np.amax(wp)
+	wp-=wpmax
+	wpsum=0
+	for i in range(3):
+		for j in range(3):
+			wp[i,j]=np.exp(beta*wp[i,j])
+			wpsum+=wp[i,j]
+	wp*=1./wpsum
+	print("wp_exp",wp)
+	return wp        
+        
+vpos=np.zeros((F,N*N,N*N))*1.
+vpos1=np.zeros((F,N*N,N*N))*1.
+vposfin=np.zeros((F,N*N,N*N))*1.
+sa=np.zeros((F,N*N,N*N), int)
+sa+=4
+w1=np.zeros((N**2,N**2))
+w2=np.zeros((N**2,N**2))
+w=np.zeros((N**4,N**4))
+w1l=np.zeros((N*N,Na),int)
+w1a=np.zeros((N*N,Na),int)
+w1ll=np.zeros((N*N),int)
+for i in range(N**2):
+    for j in range(N**2):
+        w1[i,j]=Wnum(i,j)
+        w2[i,j]=Wnum2(i,j)
+        if w1[i,j]==1:
+            w1l[i,w1ll[i]]=j
+            w1a[i,w1ll[i]]=(j//N-i//N+1)*3+(j%N-i%N+1)
+            w1ll[i]+=1
+
+        
+print("w1l",w1l)
+print("w1ll",w1ll)
+print("w1a",w1a)
+
+wp0=np.zeros((N**2,N**2))
+for j in range(N**2):
+	k=0
+	for i1 in range(3):
+		for j1 in range(3):
+			if (j//N+i1-1>=0) and (j//N+i1-1<N) and (j%N+j1-1>=0) and (j%N+j1-1<N):
+				wp0[j,(j//N+i1-1)*N+j%N+j1-1]=1.
+				k+=1
+	wp0[j]*=1./k
+
+wp=np.zeros((N**2,N**2,N**2))
+for i in range(N**2):
+	for j in range(N**2):
+		if form[1,j//N,j%N]==1:
+			wploc=Wp(i,j)
+			sumloc=0.
+			for i1 in range(3):
+				for j1 in range(3):
+					i11=j//N+i1-1
+					j11=j%N+j1-1
+					if (j11>=0) and (j11<N) and (i11>=0) and (i11<N):
+						wploc[i1,j1]*=w2[j,i11*N+j11]
+						sumloc+=wploc[i1,j1]
+			for i1 in range(3):
+				for j1 in range(3):
+					i11=j//N+i1-1
+					j11=j%N+j1-1
+					if (j11>=0) and (j11<N) and (i11>=0) and (i11<N):
+						wp[i,j,i11*N+j11]=wploc[i1,j1]/sumloc
+        
+wp0=wp[0]
+
+T=100
+if (uload==0):
+    for t in range(T):
+        print("t",t)
+        for f in range(F):
+            for i in range(N**2):
+                f2=f-1+food[i//N,i%N]
+                if (f2>=F):
+                    f2=F-1
+                if f2<0:
+                    sa[f,i,:]=4
+                else:
+                    va=np.dot(vpos[f2],wp[i].transpose())
+                    for j in range(N**2):
+                        vmax=0.
+                        ind=4
+                        for a in range(w1ll[i]):
+                                v2=va[w1l[i,a],j]
+                                #print(w1l[i,a],w1a[i,a],v2,a)
+                                if (v2>vmax) or (a==0):
+                                    ind=w1a[i,a]
+                                    vmax=v2
+                                else:
+                                    if (v2==vmax):
+                                        if (np.random.rand()<0.5):
+                                            ind=w1a[i,a]
+                        sa[f,i,j]=ind
+        for iter in range(10): 
+            for f in range(F):
+                for i in range(N**2):
+                    if form[0,i//N,i%N]>0:
+                        f2=f-1+food[i//N,i%N]
+                        if (f2>=F):
+                            f2=F-1
+                        if f2<0:
+                            vpos[f,i,:]=-1
+                        else:
+                            va=np.dot(vpos[f2],wp[i].transpose())
+                            for j in range(N**2):
+                                ind=sa[f,i,j]
+                                v2=va[i+(ind//3-1)*N+(ind%3-1),j]
+                                vsum=0.
+                                for k in range(w1ll[i]):
+                                    vsum+=va[i+(w1a[i,k]//3-1)*N+(w1a[i,k]%3-1),j]
+                                vpos1[f,i,j]=q0(i,j)+gamma*(v2*(1-nz)+vsum*nz/w1ll[i])
+            for f in range(F):
+                    vpos[f]=vpos1[f]
+                    for i in range(N**2):
+                        vpos[f,i,i]=-1
+
+        if t==T-2:
+                for f in range(F):
+                    vposfin[f]=vpos[f]
+
+    print("vposfin")
+    for f in range(F):
+        print("f ",f)
+        for i in range(N**2):
+            print(vposfin[f,i])
+    print("sa")
+    for f in range(F):
+        print("f ",f)
+        for i in range(N**2):
+            print(sa[f,i])
+    if (usafe==1):
+        file = open(pref, "wb")
+        np.save(file, sa) #vposfin)
+        file.close
+else:
+        file = open(pref, "rb")
+        sa = np.load(file)
+        file.close
+        for iter in range(20):#100 
+            for f in range(F):
+                for i in range(N**2):
+                    f2=f-1+food[i//N,i%N]
+                    if (f2>=F):
+                        f2=F-1
+                    if f2<0:
+                        vpos[f,i,:]=-1
+                    else:
+                        va=np.dot(vpos[f2],wp[i].transpose())
+                        for j in range(N**2):
+                            ind=sa[f,i,j]
+                            v2=va[i+(ind//3-1)*N+(ind%3-1),j]
+                            vpos1[f,i,j]=q0(i,j)+gamma*v2
+            for f in range(F):
+                    vpos[f]=vpos1[f]
+                    for i in range(N**2):
+                        vpos[f,i,i]=-1
+
+            for f in range(F):
+                    vposfin[f]=vpos[f]
+
+        print("vposfin",vposfin)
+        
+spos=np.array([F-1,N//2,1,N-1,N-1])
+u=0
+for k in range(0): #10
+	spos[1]=int(N*np.random.rand())
+	spos[2]=int(N*np.random.rand())
+	spos[3]=int(N*np.random.rand())
+	spos[4]=int(N*np.random.rand())
+	if (form[0,spos[1],spos[2]]==1) and (form[1,spos[3],spos[4]]==1):
+		u=1
+		break
+if u==0:
+	spos=np.array([F-1,N//2,1,N-1,N-1])
+s=postos(spos)
+
+tshift=0#1390#167
+tstop=steps#1600#steps-1#448
+n_rot=0#40#5
+rec=np.zeros((steps+1), int)
+
+if (urecload==1):
+	file = open("trot_"+pref+"_steps"+str(steps), "rb")
+	trotfin=np.load(file)
+	print("trotfin",trotfin)
+	file.close
+	file = open("rec_"+pref+"_steps"+str(steps), "rb")
+	rec=np.load(file)
+	file.close
+	file = open("tlifes_"+pref+"_steps"+str(steps), "rb")
+	lfs=np.load(file)
+	file.close
+	print("lfs",lfs)
+	print("tbirths")
+	t=0
+	for i in range(len(lfs)):
+		print(t)
+		t+=lfs[i]+5
+	t=0
+if (urecload==1):
+    s=rec[tshift]
+    spos=stopos(s)
+    spos0=stopos(s)
+
+pa=np.zeros(Na)*1.
+print("s",stopos(s))
+
+import turtle
+turtle.ht()
+scr = turtle.getscreen()
+t0 = turtle.Turtle()
+t0.speed(0)
+dx=120
+t0.penup()
+t0.ht()
+
+screen = turtle.Screen()
+screen.register_shape("cat_free.gif")#"cat2.gif")
+screen.register_shape("mouse_free.gif")#"mouse_active3.gif")
+screen.register_shape("mouse_dead_free.gif")#"mouse_quiet3.gif")
+screen.register_shape("cheese.gif")
+screen.register_shape("cheese-white.gif")
+x0=-400
+y0=-425
+
+t0.penup()
+fdlst=[]
+fdn=0
+for i in range(N): 
+	for j in range(N): 
+		if food[i,j]>0:
+			fdlst.append(turtle.Turtle())
+			fdlst[fdn].shape("cheese.gif")
+			fdlst[fdn].speed(10)
+			fdlst[fdn].penup()
+			fdlst[fdn].goto(x0+i*dx+dx//2,y0+j*dx+dx//2)
+			fdn+=1
+
+
+t0.color("green","green")
+t0.pencolor("black")
+
+t2 = turtle.Turtle()
+t2.penup()
+t2.speed(10)
+t1 = turtle.Turtle()
+t1.speed(0) 
+t1.penup()
+t1.shape("mouse_free.gif")#"mouse_active3.gif")
+t2.shape("cat_free.gif")#"cat2.gif")
+
+t1.penup()
+t1.goto(x0+spos[1]*dx+dx//2,y0+spos[2]*dx+dx//2)
+t2.goto(x0+spos[3]*dx+dx//2,y0+spos[4]*dx+dx//2)
+glide=5
+t1.speed(glide)
+t2.speed(glide)
+
+xtxt=-400
+ytxt=415
+
+tz = turtle.Turtle()
+tz.penup()
+
+tz.goto(xtxt-300,ytxt-50)
+tz.pendown()
+tz.write("R agent",font=('Arial',50,'normal'))
+tz.penup()
+
+tz.color("white")
+tz.speed(10)
+yz0=y0
+xz0=x0+N*dx+50
+dxz=3
+dyz=1000
+
+tz.goto(xz0,yz0-200)
+tz.pendown()
+tz.goto(xz0,yz0+400)
+tz.seth(90)
+tz.stamp()
+tz.write('v',font=('Arial',20,'normal') )
+tz.penup()
+tz.goto(xz0,yz0)
+tz.pendown()
+tz.goto(xz0+400,yz0)
+tz.seth(0)
+tz.stamp()
+tz.write('t',font=('Arial',20,'normal') )
+tz.penup()
+tz.ht()
+tz.goto(xz0,yz0+int( vposfin[s//N**4,(s%N**4)//N**2,s%N**2] *dyz))
+tz.pendown()
+
+tf = turtle.Turtle()
+tf.penup()
+tf.speed(10)
+yf0=y0
+xf0=x0-80
+dxf=1
+dyf=int(300/F)
+tf.shape('cheese-white.gif')
+tf.goto(xf0,yf0)
+tf.pencolor('green')
+tf.width(20)
+tf.pendown()
+tf.goto(xf0,yf0+int( s//N**4 *dyf))
+
+turrot = turtle.Turtle()
+turrot.ht()
+turrot.penup()
+turrot.speed(10)
+turrot.goto(xtxt,ytxt)
+
+yar0=yf0+500
+yar1=yar0+200
+tar = turtle.Turtle()
+tar.ht()
+tar.pencolor("black")
+tar.penup()
+tar.speed(10)
+tar.goto(xf0,yar0)
+
+def paintborders():
+    t0.width(1)
+    for i in range(N):
+	    for j in range(N):
+		    if form[0,i,j]==1:
+			    t0.penup()
+			    #t0.goto(i*dx,j*dx)
+			    if form[1,i,j]==0:
+				    t0.pencolor("green")
+			    else:
+				    t0.pencolor("black")
+			    if (i==0) or (form[0,i-1,j]==0):
+				    t0.penup()
+				    t0.goto(x0+i*dx,y0+j*dx)
+				    t0.pendown()
+				    t0.goto(x0+i*dx,y0+(j+1)*dx)
+			    if (j==0) or (form[0,i,j-1]==0):
+				    t0.penup()
+				    t0.goto(x0+i*dx,y0+j*dx)
+				    t0.pendown()
+				    t0.goto(x0+(i+1)*dx,y0+j*dx)
+			    if (i==N-1) or (form[0,i+1,j]==0):
+				    t0.penup()
+				    t0.goto(x0+(i+1)*dx,y0+j*dx)
+				    t0.pendown()
+				    t0.goto(x0+(i+1)*dx,y0+(j+1)*dx)
+			    if (j==N-1) or (form[0,i,j+1]==0):
+				    t0.penup()
+				    t0.goto(x0+i*dx,y0+(j+1)*dx)
+				    t0.pendown()
+				    t0.goto(x0+(i+1)*dx,y0+(j+1)*dx)
+    t0.penup()
+paintborders()
+
+tail='png'
+t0.getscreen().getcanvas().postscript(file='temp.eps')
+im=Im.open("temp.eps") #('cat2.gif')
+imcon=im.convert("RGB")
+imcon.save("temp."+tail)
+img = cv2.imread('temp.'+tail)
+height, width, layers = img.shape
+framesize = (width,height)
+if (uvideo==1):
+	outfile='output_video_plots_'+pref+'_steps'+str(steps)+'.mp4'#'.avi'
+	out = cv2.VideoWriter(outfile,cv2.VideoWriter_fourcc(*'mp4v'), 2*glide, framesize) #cv2.VideoWriter_fourcc(*'MP42') 'DIVX'
+	out.write(img)
+else:
+	glide=0
+bardo=5
+trebirth=steps+1
+tlifes=[]
+occ=np.zeros((N,N),int)
+vocc=np.zeros((N,N,Na),int)
+v_prod_av=np.zeros((5))
+vr_prod_av=np.zeros((N**2+1))
+maxwell_d=1
+xwall=2
+xhalf=0
+if (spos[1]>xwall):
+	xhalf=1
+if (spos[1]<xwall):
+	xhalf=-1
+rotcl=0
+rotacl=0
+Trot=500
+rotco=np.zeros((steps//Trot,2),int)
+rot2cl=0
+rot2acl=0
+rot2co=np.zeros((steps//Trot,2),int)
+rotepoch=0
+ycross=0
+ycross0=0
+ncross=0
+rec[0]=s
+utxt=0
+uar=0
+t0_rot=0
+ucl=0
+uacl=0
+tcross=0
+t_rot=np.zeros((3,steps//5),int)
+tcs=np.zeros((3,steps//5),int)
+ep=np.zeros((F),int)
+
+
+t=tshift
+for t in range(tshift,tstop):
+    r=np.random.rand()
+    na=w1ll[(s%N**4)//N**2]
+    if (r>=nz):
+        a=sa[s//N**4,(s%N**4)//N**2,s%N**2]
+    else:
+        a=w1a[(s%N**4)//N**2,int(r/nz*na)]
+    #print("a ",a)
+    r2=np.random.rand()
+    ls,ps=nexts(s,a)
+    spos0=stopos(s)
+    for a2 in range(len(ls)):
+                r2-=ps[a2]
+                if r2<0:
+                    s=ls[a2]
+                    break
+    if urecload==0:
+        rec[t+1]=s
+    if urecload==1:
+        s=rec[t+1]
+    print("t,s",t,stopos(s))
+    spos=stopos(s)
+    if (spos[0]>spos0[0]) or (t==trebirth):
+        tf.pencolor('green')
+    else:
+        tf.pencolor('white')
+    tf.goto(xf0,yf0+int(s//N**4 *dyf) )
+    for stp in range(glide):
+        st=stp+1
+        t1.goto(x0+spos0[1]*dx+int((spos[1]-spos0[1])*dx*st/glide*1.)+dx//2,y0+spos0[2]*dx+int((spos[2]-spos0[2])*dx*st/glide*1.)+dx//2)        
+        t2.goto(x0+spos0[3]*dx+int((spos[3]-spos0[3])*dx*st/glide*1.)+dx//2,y0+spos0[4]*dx+int((spos[4]-spos0[4])*dx*st/glide*1.)+dx//2)       
+        if (st==glide) and (spos[0]==-1):
+            t1.shape("mouse_dead_free.gif")#"mouse_quiet3.gif")
+            if (spos0[0]>-1):
+                trebirth=t+bardo
+            if (t==trebirth):
+                u=0
+                spos[0]=F-1
+                if u==0:
+                	spos[2]=1
+                	spos[1]=N//2
+                s=postos(spos)
+                t1.goto(x0+spos[1]*dx+dx//2,y0+spos[2]*dx+dx//2)
+                t1.shape("mouse_free.gif")#"mouse_active3.gif")
+
+        t0.getscreen().getcanvas().postscript(file="temp.eps")
+        im=Im.open("temp.eps")
+        imcon=im.convert("RGB")
+        imcon.save("temp."+tail)
+        img = cv2.imread('temp.'+tail)
+        out.write(img)
+    if (glide==0):
+        if (spos[0]==-1):
+            t1.shape("mouse_dead_free.gif")#"mouse_quiet3.gif")
+            if (spos0[0]>-1):
+                if (trebirth<steps):
+                    tlife=t-trebirth
+                else:
+                    tlife=t
+                tlifes.append(tlife)
+                trebirth=t+bardo
+            if (t==trebirth):
+                u=0
+                spos[0]=F-1
+                if u==0:
+                	spos[2]=1
+                	spos[1]=N//2
+                s=postos(spos)
+                t1.goto(x0+spos[1]*dx+dx//2,y0+spos[2]*dx+dx//2)
+                t1.shape("mouse_free.gif")#"mouse_active3.gif")
+                xhalf=0
+                if (spos[1]>xwall):
+	                xhalf=1
+                if (spos[1]<xwall):
+	                xhalf=-1
+                tf.pencolor('white')
+                tf.goto(xf0,yf0)
+                tf.pencolor('green')
+                tf.goto(xf0,yf0+int(s//N**4 *dyf) )
+    if (spos[0]>=0):
+        ep[spos[0]]+=1
+    if (spos0[0]>-1):
+            vocc[spos0[1],spos0[2],(spos[1]-spos0[1]+1)*3+(spos[2]-spos0[2]+1)]+=1
+            v_prod=(spos[1]-spos0[1])*(spos[3]-spos0[3])+(spos[2]-spos0[2])*(spos[4]-spos0[4])
+            if (v_prod!=0):
+                v_prod*=1./np.sqrt((spos[1]-spos0[1])**2+(spos[2]-spos0[2])**2)/np.sqrt((spos[3]-spos0[3])**2+(spos[4]-spos0[4])**2)
+            v_prod_av[int(2*v_prod)+2]+=1
+            vr_prod=(spos[1]-spos0[1])*(spos0[3]-spos0[1])+(spos[2]-spos0[2])*(spos0[4]-spos0[2])
+            if (vr_prod!=0):
+                vr_prod*=1./np.sqrt((spos[1]-spos0[1])**2+(spos[2]-spos0[2])**2)/np.sqrt((spos0[3]-spos0[1])**2+(spos0[4]-spos0[2])**2)
+            vr_prod_av[int(np.arccos(vr_prod)/np.pi*N**2 ) ]+=1
+    if not ( (spos[0]==-1)): # and (spos0[0]==-1) ):
+        tz.goto(xz0+(t+1)*dxz,yz0+int(vposfin[s//N**4,(s%N**4)//N**2,s%N**2] *dyz))
+        occ[spos[1],spos[2]]+=1
+        if (maxwell_d==1):
+            if (spos0[1]==xwall)  and (spos0[2]>2):
+                if ( (spos[1]-xwall)*xhalf==-1):
+                    print("crosswall")
+                    xhalf=spos[1]-xwall
+                    ycross0=ycross
+                    ycross=spos0[2]
+                    tcs[0,ncross]=t
+                    tcs[1,ncross]=(spos[1]-xwall)
+                    tcs[2,ncross]=2*(ycross//4)-1
+                    ncross+=1
+                    tcross0=tcross
+                    tcross=t
+
+                    if ycross0>0:
+                        if (ycross-ycross0)*xhalf>0:
+                            rotcl+=1
+                            rot2cl+=1
+                            ucl+=1
+                            #rot0=1
+                        if (ycross-ycross0)*xhalf<0:
+                            rotacl+=1
+                            rot2acl+=1
+                            uacl+=1
+                        print("ucl,uacl",ucl,uacl)
+                        if (ycross-ycross0)==0:
+                            rot2cl=(rot2cl//2)*2
+                            rota2cl=(rot2acl//2)*2
+                            if ucl>0:
+                                if urecload==0:
+                                    t_rot[0,n_rot]=t0_rot
+                                    t_rot[1,n_rot]=tcross0
+                                    t_rot[2,n_rot]=ucl
+                                n_rot+=1
+                            if uacl>0:
+                                if urecload==0:
+                                    t_rot[0,n_rot]=t0_rot
+                                    t_rot[1,n_rot]=tcross0
+                                    t_rot[2,n_rot]=-uacl
+                                n_rot+=1
+                            t0_rot=t
+                            ucl=0
+                            uacl=0
+                    else:
+                        t0_rot=t
+
+                    if (urecload==1):
+                        print("n_rot, trotfin, t0, tcross0, ucl, uacl",n_rot,trotfin[:,n_rot],t0_rot,tcross0,ucl,uacl) #, utxt, urecload)
+                        if (t>=trotfin[0,n_rot]) and (t<trotfin[1,n_rot]):
+                            print("rot_start",trotfin[2,n_rot],trotfin[2,n_rot]>1,trotfin[2,n_rot]<-1)
+                            print("xhalf,uar",xhalf,uar)
+                            if  (xhalf<0) and (uar==0):
+                                if ycross>4:
+                                    print("updown")
+                                    tar.penup()
+                                    tar.goto(xf0,yar1)
+                                    tar.pendown()
+                                    tar.goto(xf0,yar0)
+                                    tar.seth(270)
+                                    tar.stamp()
+                                    tar.penup()
+                                    uar=1
+                                else:
+                                    if ycross>0:
+                                        print("downup")
+                                        tar.penup()
+                                        tar.goto(xf0,yar0)
+                                        tar.pendown()
+                                        tar.goto(xf0,yar1)
+                                        tar.seth(90)
+                                        tar.stamp()
+                                        tar.penup()
+                                        uar=1
+                            if  (xhalf>0):
+                                tar.clear()
+                                uar=0
+
+                            if (utxt==0):
+                                if trotfin[2,n_rot]>1:
+                                    print("clockwise rotation")
+                                    turrot.clear()
+                                    turrot.goto(xtxt,ytxt)
+                                    turrot.pendown()
+                                    turrot.write("clockwise rotation",font=('Arial',20,'normal'))
+                                    turrot.penup()
+                                    utxt=1
+                                if trotfin[2,n_rot]<-1:
+                                    print("anticlockwise rotation")
+                                    turrot.clear()
+                                    turrot.goto(xtxt,ytxt)
+                                    turrot.pendown()
+                                    turrot.write("anticlockwise rotation",font=('Arial',20,'normal'))
+                                    turrot.penup()
+                                    utxt=1
+                        if t==trotfin[1,n_rot]:
+                            print("rot_stop")
+                            turrot.clear()
+                            utxt=0
+                            tar.clear()
+                            uar=0
+
+                if (xhalf==0):
+                    xhalf=spos[1]-xwall
+    else:
+        tz.goto(xz0+(t+1)*dxz,yz0-dyz)
+        if (spos0[0]>-1):
+                        rot2cl=(rot2cl//2)*2
+                        rota2cl=(rot2acl//2)*2
+                        if ucl>0:
+                            if urecload==0:
+                                t_rot[0,n_rot]=t0_rot
+                                t_rot[1,n_rot]=tcross
+                                t_rot[2,n_rot]=ucl
+                            n_rot+=1
+                        if uacl>0:
+                            if urecload==0:
+                                t_rot[0,n_rot]=t0_rot
+                                t_rot[1,n_rot]=tcross
+                                t_rot[2,n_rot]=-uacl
+                            n_rot+=1
+                        t0_rot=t
+                        print("ucl,uacl,n_rot,t_rot",ucl,uacl,n_rot,t_rot[:,0:n_rot+1])
+                        ycross0=0
+                        ycross=0
+                        xhalf=0
+                        ucl=0
+                        uacl=0
+                        print("rot_stop")
+                        turrot.clear()
+                        utxt=0
+                        tar.clear()
+                        uar=0
+
+    if (t%Trot==0) and (t>0):
+        rotco[rotepoch,0]=rotcl
+        rotco[rotepoch,1]=rotacl
+        rotcl=0
+        rotacl=0
+        rot2co[rotepoch,0]=rot2cl//2
+        rot2co[rotepoch,1]=rot2acl//2
+        rot2cl-=rot2cl//2
+        rot2acl-=rot2acl//2
+        rotepoch+=1
+
+if ucl>0:
+    t_rot[0,n_rot]=t0_rot
+    t_rot[1,n_rot]=t
+    t_rot[2,n_rot]=ucl
+    n_rot+=1
+if uacl>0:
+    t_rot[0,n_rot]=t0_rot
+    t_rot[1,n_rot]=t
+    t_rot[2,n_rot]=-uacl
+    n_rot+=1
+
+if (urecload==0):
+	trotfin=np.zeros((3,n_rot),int)
+	trotfin=t_rot[:,0:n_rot]
+	file = open("trot_"+pref+"_steps"+str(steps), "wb")
+	np.save(file, trotfin)
+	file.close
+	tcsfin=np.zeros((3,ncross),int)
+	tcsfin=tcs[:,0:ncross]
+	file = open("tcs_"+pref+"_steps"+str(steps), "wb")
+	np.save(file, trotfin)
+	file.close
+	file = open("rec_"+pref+"_steps"+str(steps), "wb")
+	np.save(file, rec)
+	file.close
+
+print("occ",occ)
+print("tlifes",tlifes)
+if (len(tlifes)>0):
+	print("t_av",sum(tlifes) / len(tlifes))
+file = open("tlifes_"+pref+"_steps"+str(steps), "wb")
+np.save(file, tlifes)
+file.close
+print("v_prod",v_prod_av)
+v_prod_av*=1./sum(v_prod_av)
+print("v_prod_av",v_prod_av)
+print("vr_prod",vr_prod_av)
+print("ep",ep)
+print("ep_norm",ep*1./sum(ep))
+if (maxwell_d):
+	print("rotcl,rotacl,ncross",rotcl,rotacl,ncross)
+	print("rotco",rotco)
+	file = open("rotco_"+pref+"_steps"+str(steps), "wb")
+	np.save(file, rotco)
+	file.close
+	file = open("rot2co_"+pref+"_steps"+str(steps), "wb")
+	np.save(file, rot2co)
+	file.close
+if (uvideo==1):
+	out.release()
+
+t1.ht()
+t2.ht()
+tf.clear()
+tz.clear()
+tf.ht()
+for i in range(len(fdlst)):
+	fdlst[i].ht()
+maxocc=np.amax(occ)
+dx_vocc=dx//2
+marg=0
+ya=np.array([-1,0,1,-1,0,1,-1,0,1])
+xa=np.array([-1,-1,-1,0,0,0,1,1,1])
+vah=np.zeros((N,N))
+paintborders()
+t0.width(1)
+vocc_norm=np.zeros((N,N,Na))
+vocc_norm_av=np.zeros((N,N,2))
+vav=1
+for i in range(N):
+        for j in range(N):
+                if occ[i,j]>0:
+                        t0.color(( 1.,1.,1.-occ[i,j]/maxocc ),( 1.,1.,1.-occ[i,j]/maxocc ))
+                else:
+                        t0.color("white","white")
+                t0.penup()
+                t0.goto(x0+i*dx+marg,y0+j*dx+marg)
+                t0.pendown()
+                t0.width(1)
+                t0.begin_fill()
+                t0.goto(x0+i*dx+marg,y0+(j+1)*dx-marg)
+                t0.goto(x0+(i+1)*dx-marg,y0+(j+1)*dx-marg)
+                t0.goto(x0+(i+1)*dx-marg,y0+j*dx+marg)
+                t0.goto(x0+i*dx+marg,y0+j*dx+marg)
+                t0.end_fill()
+                t0.pencolor("black")
+                if occ[i,j]>0:                    
+                    vxsum=0.
+                    vysum=0.
+                    for a in range(Na):
+                            va=vocc[i,j,a]*1./(sum(vocc[i,j,:]))
+                            vocc_norm[i,j,a]=va
+                            if va>0:
+                                    vah[i,j]+=-va*np.log(va)
+                            vxsum+=va*(a//3-1)
+                            vysum+=va*(a%3-1)
+                            if (vocc[i,j,a]>0) and (vav!=1):
+                                t0.penup()
+                                t0.goto(x0+i*dx+dx//2,y0+j*dx+dx//2)
+                                t0.pendown()
+                                if (a==4):
+                                    t0.width(2)
+                                    t0.goto(x0+i*dx+dx//2,y0+j*dx+dx//2-int(va*dx_vocc/2))
+                                    t0.circle(int(va*dx_vocc/2))
+                                else:
+                                    t0.width(3)
+                                    t0.goto(x0+i*dx+dx//2+(a//3-1)*int(va*dx_vocc),y0+j*dx+dx//2+(a%3-1)*int(va*dx_vocc))
+                    vocc_norm_av[i,j,0]=vxsum
+                    vocc_norm_av[i,j,1]=vysum
+                    if vav==1:
+                            t0.penup()
+                            t0.goto(x0+i*dx+dx//2,y0+j*dx+dx//2)
+                            t0.pendown()
+                            t0.width(3)
+                            t0.goto(x0+i*dx+dx//2+(a//3-1)*int(vxsum*dx_vocc),y0+j*dx+dx//2+(a%3-1)*int(vysum*dx_vocc))
+
+t0.width(1)
+t0.penup()
+tz.clear()
+tf.clear()
+tf.ht()
+for i in range(len(fdlst)):
+	fdlst[i].ht()
+paintborders()
+t0.getscreen().getcanvas().postscript(file="occ_vocc_vav"+str(vav)+"_"+pref+".eps")
+file = open("occ_"+pref+"steps"+str(steps), "wb")
+np.save(file, occ)
+file.close
+file = open("vocc_norm_"+pref+"steps"+str(steps), "wb")
+np.save(file, vocc_norm)
+file.close
+file = open("vocc_norm_av_"+pref+"steps"+str(steps), "wb")
+np.save(file, vocc_norm_av)
+file.close
+
+maxvah=np.amax(vah)
+print("vah",vah)
+print("maxvah",maxvah)
+t0.clear()
+t0.width(1)
+for i in range(N):
+        for j in range(N):
+                if vah[i,j]>0:
+                        t0.color(( 1.,1.,1.-vah[i,j]/maxvah ),( 1.,1.,1.-vah[i,j]/maxvah ))
+                else:
+                        t0.color("white","white")
+                t0.penup()
+                t0.goto(x0+i*dx+marg,y0+j*dx+marg)
+                t0.pendown()
+                t0.width(1)
+                t0.begin_fill()
+                t0.goto(x0+i*dx+marg,y0+(j+1)*dx-marg)
+                t0.goto(x0+(i+1)*dx-marg,y0+(j+1)*dx-marg)
+                t0.goto(x0+(i+1)*dx-marg,y0+j*dx+marg)
+                t0.goto(x0+i*dx+marg,y0+j*dx+marg)
+                t0.end_fill()
+t0.pencolor("black")
+paintborders()
+t0.getscreen().getcanvas().postscript(file="vah_"+pref+".eps")
+
+t0.clear()
+t0.width(1)
+t0.color("black","black")
+t0.penup()
+t0.goto(xz0,yz0)
+t0.pendown()
+t0.goto(xz0,yz0+500)
+t0.seth(90)
+t0.stamp()
+t0.write('p',font=('Arial',20,'normal') )
+t0.penup()
+t0.goto(xz0,yz0)
+t0.pendown()
+t0.goto(xz0+500,yz0)
+t0.seth(0)
+t0.stamp()
+t0.write('E',font=('Arial',20,'normal') )
+t0.goto(xz0,yz0)
+t0.pendown()
+epav=ep*1./sum(ep)
+i=0
+for pe in epav:
+	t0.goto(xz0+i*30,yz0+int(pe*5000))
+	i+=1
+t0.penup()
+file = open("ep_"+pref, "wb")
+np.save(file, epav) 
+file.close
+file = open("occ_"+pref, "wb")
+np.save(file, occ) 
+file.close
+file = open("vocc_"+pref, "wb")
+np.save(file, vocc) 
+file.close
+t0.getscreen().getcanvas().postscript(file="pe_"+pref+".eps")
