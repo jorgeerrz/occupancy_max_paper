@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.4
+# v0.19.12
 
 using Markdown
 using InteractiveUtils
@@ -22,6 +22,9 @@ begin
 	using Interpolations, StatsPlots, DelimitedFiles, ZipFile
 end
 
+# ╔═╡ 1525f483-b6ac-4b12-90e6-31e97637d282
+using StatsBase
+
 # ╔═╡ 18382e9c-e812-49ff-84cc-faad709bc4c3
 using LinearAlgebra
 
@@ -31,7 +34,7 @@ begin
 end
 
 # ╔═╡ 0a29d50e-df0a-4f54-b588-faa6aee2e983
-theme(:default,titlefont = ("Computer Modern",16), legend_font_family = "Computer Modern", legend_font_pointsize = 14, guidefont = ("Computer Modern", 16), tickfont = ("Computer Modern", 14),foreground_color_border = :black)
+theme(:default,titlefont = ("Computer Modern",16), legend_font_family = "Computer Modern", legend_font_pointsize = 14, guidefont = ("Computer Modern", 16), tickfont = ("Computer Modern", 16),foreground_color_border = :black)
 
 # ╔═╡ 379318a2-ea2a-4ac1-9046-0fdfe8c102d4
 interpolation = true
@@ -91,24 +94,8 @@ function searchsortednearest(a,x,which)
 	end
 end
 
-# ╔═╡ 4263babb-32ae-446f-b6a6-9d5451ed40cd
-function entropy(pd, delta = 1E-2)
-	out = 0
-	if abs(sum(pd) - 1) > delta
-		throw(ErrorException("Probabilites do not add up to 1"))
-	else
-		for i in 1:length(pd)
-			if pd[i] < 0 || pd[i] > 1
-				throw(ErrorException("Probabilites need to lie inside the simplex"))
-			else
-				if pd[i] > 0 #exclude log(0)
-					out += - pd[i]*log(pd[i])
-				end
-			end
-		end
-	end
-	out
-end
+# ╔═╡ 9396a0d1-6036-44ec-98b7-16df4d150b54
+md"# H agent"
 
 # ╔═╡ cfdf3a8e-a377-43ef-8a76-63cf78ce6a16
 @with_kw struct inverted_pendulum_borders
@@ -165,16 +152,13 @@ function real_transition(state::State,action,env::inverted_pendulum_borders)
 		new_u = 1
 	end
 	if abs(new_v) >=env.max_v
-		new_v = sign(new_v)*env.max_x
+		new_v = sign(new_v)*env.max_v
 	end
 	if abs(new_w) >= env.max_w
 		new_w = sign(new_w)*env.max_w
 	end
 	State(θ = new_th, w = new_w, v = new_v, x = new_x, u = new_u)
 end
-
-# ╔═╡ 9396a0d1-6036-44ec-98b7-16df4d150b54
-md"# H agent"
 
 # ╔═╡ ffe32878-8732-46d5-b57c-9e9bb8e6dd74
 function adm_actions_b(s::State, ip::inverted_pendulum_borders)
@@ -217,22 +201,28 @@ function transition_b(state::State,action,env::inverted_pendulum_borders)
 		idx_w = searchsortednearest(env.ws,new_w,"normal")
 		idx_v = searchsortednearest(env.vs,new_v,"normal")
 		idx_x = searchsortednearest(env.xs,new_x,"position")
-		u_new = state.u
+		new_u= state.u
+		#If angle or location pass threshold, cartpole dies
 		if abs(env.θs[idx_th]) >= env.max_θ || abs(env.xs[idx_x]) >= env.max_x
-			u_new = 1
+		#if abs(new_th) >= env.max_θ || abs(new_x) >= env.max_x
+			new_u = 1
 		end
 	else
+		new_th = state.θ
+		new_w = state.w
+		new_v = state.v
+		new_x = state.x
+		new_u = state.u
 		idx_th = searchsortednearest(env.θs,state.θ,"position")
 		idx_w = searchsortednearest(env.ws,state.w,"normal")
 		idx_v = searchsortednearest(env.vs,state.v,"normal")
 		idx_x = searchsortednearest(env.xs,state.x,"position")		
-		u_new = state.u
 	end
 	θ_new = env.θs[idx_th]
 	w_new = env.ws[idx_w]
 	v_new = env.vs[idx_v]
 	x_new = env.xs[idx_x]
-	[idx_th,idx_w,u_new,idx_v,idx_x],State(θ = θ_new, w = w_new, v = v_new, u = u_new, x = x_new)
+	[idx_th,idx_w,new_u,idx_v,idx_x],State(θ = θ_new, w = w_new, v = v_new, u = new_u, x = x_new)
 end
 
 # ╔═╡ f92e8c6d-bf65-4786-8782-f38847a7fb7a
@@ -254,81 +244,30 @@ function degeneracy_cost(state,env::inverted_pendulum_borders,δ = 1E-5)
 	-δ*((state.θ/env.max_θ)^2+(state.x/env.max_x)^2+(state.v/env.max_v)^2+(state.w/env.max_w)^2)/4
 end
 
-# ╔═╡ ce8bf897-f240-44d8-ae39-cf24eb115704
-function iteration(env::inverted_pendulum_borders, tolerance = 1E0, n_iter = 100;δ = 1E-5)
-	v = zeros(env.nstates)
-	v_new = zeros(env.nstates)
-	t_stop = n_iter
-	error = 0
-	f_error = 0
-	for t in 1:n_iter
-		ferror_max = 0
-		#Parallelization over states
-		Threads.@threads for idx_θ in 1:env.sizeθ
-			for idx_w in 1:env.sizew, idx_u in 1:env.sizeu, idx_v in 1:env.sizev, idx_x in 1:env.sizex
-				state_idx = [idx_θ,idx_w,idx_u,idx_v,idx_x]
-				state = State(θ = env.θs[idx_θ], w = env.ws[idx_w], u = idx_u, v = env.vs[idx_v], x = env.xs[idx_x])
-				i = build_index_b(state_idx,env)
-				actions,ids_actions = adm_actions_b(state,env)
-				sum = 0
-				# Add negligible external reward that breaks degeneracy for 
-				# Q agent
-				small_reward = degeneracy_cost(state,env,δ)
-				for (id_a,a) in enumerate(actions)
-					#For every action, look at reachable states
-					s_primes_ids,states_p = reachable_states_b(state,a,env)
-					exponent = 0
-					for (idx,s_p) in enumerate(s_primes_ids)
-						i_p = build_index_b(s_p,env)
-						P = 1
-						exponent += env.γ*P*v[i_p]
-					end
-					sum += exp(exponent + small_reward)
-				end
-				v_new[i] = log(sum)
-				f_error = abs(v[i] - v_new[i])
-				# Use supremum norm of difference between values
-				# at different iterations
-				ferror_max = max(ferror_max,f_error)
-			end
-		end
-		# Check overall error between value's values at different iterations
-		error = norm(v-v_new)/norm(v)
-		#if f_error < tolerance
-		if ferror_max < tolerance
-			t_stop = t
-			break
-		end
-		println("iteration = ", t, ", error = ", error, ", max function error = ", ferror_max)
-		v = deepcopy(v_new)
-	end
-	v_new,error,t_stop
-end
-
 # ╔═╡ b975eaf8-6a94-4e39-983f-b0fb58dd70a1
-function optimal_policy_b(dstate,state,value,env::inverted_pendulum_borders)
+function optimal_policy_b(state,value,env::inverted_pendulum_borders)
 	#Check admissible actions
-	actions,ids_actions = adm_actions_b(dstate,env)
+	actions,ids_actions = adm_actions_b(state,env)
 	policy = zeros(length(actions))
-	state_index = build_nonflat_index_b(state,env)
-	id_state = build_index_b(state_index,env)
+	#state_index = build_nonflat_index_b(state,env)
+	#id_state = build_index_b(state_index,env)
 	#Value at current state
 	v_state = value(state.θ,state.w,state.u,state.v,state.x)
 	for (idx,a) in enumerate(actions)
 		#Given action, check reachable states (deterministic environment for now)
-		s_primes_ids,states_p = reachable_states_b(state,a,env)
+		#s_primes_ids,states_p = reachable_states_b(state,a,env)
 		s_prime = real_transition(state,a,env)
 		exponent = 0
 		#for s_p in s_primes_ids
 			P = 1
-			if interpolation == true
+			#if interpolation == true
 				#interpolated value
 				exponent += env.γ*P*value(s_prime.θ,s_prime.w,s_prime.u,s_prime.v,s_prime.x)
-			else
-				#deterministic environment
-				i_p = build_index_b(s_primes_ids[1],env)
-				exponent += env.γ*P*value[i_p]
-			end
+			# else
+			# 	#deterministic environment
+			# 	i_p = build_index_b(s_primes_ids[1],env)
+			# 	exponent += env.γ*P*value[i_p]
+			# end
 		#end
 		#Normalize at exponent
 		exponent -= v_state
@@ -353,14 +292,109 @@ function interpolate_value(flat_value,env::inverted_pendulum_borders)
 	sitp
 end
 
+# ╔═╡ ce8bf897-f240-44d8-ae39-cf24eb115704
+function iteration(env::inverted_pendulum_borders, tolerance = 1E0, n_iter = 100;δ = 1E-5,verbose = false)
+	v = zeros(env.nstates)
+	v_new = zeros(env.nstates)
+	t_stop = n_iter
+	error = 0
+	f_error = 0
+	for t in 1:n_iter
+		v_itp = interpolate_value(v,env)
+		ferror_max = 0
+		#Parallelization over states
+		Threads.@threads for idx_θ in 1:env.sizeθ
+			for idx_w in 1:env.sizew, idx_u in 1:env.sizeu, idx_v in 1:env.sizev, idx_x in 1:env.sizex
+				state_idx = [idx_θ,idx_w,idx_u,idx_v,idx_x]
+				state = State(θ = env.θs[idx_θ], w = env.ws[idx_w], u = idx_u, v = env.vs[idx_v], x = env.xs[idx_x])
+				i = build_index_b(state_idx,env)
+				actions,ids_actions = adm_actions_b(state,env)
+				sum = 0
+				# Add negligible external reward that breaks degeneracy for 
+				# Q agent
+				small_reward = degeneracy_cost(state,env,δ)
+				for (id_a,a) in enumerate(actions)
+					#For every action, look at reachable states
+					#s_primes_ids,states_p = reachable_states_b(state,a,env)
+					states_p = [real_transition(state,a,env)]
+					exponent = 0
+					for (idx,s_p) in enumerate(states_p)
+						#i_p = build_index_b(s_p,env)
+						P = 1
+						exponent += env.γ*P*v_itp(s_p.θ,s_p.w,s_p.u,s_p.v,s_p.x)
+					end
+					sum += exp(exponent + small_reward)
+				end
+				v_new[i] = log(sum)
+				f_error = abs(v[i] - v_new[i])
+				# Use supremum norm of difference between values
+				# at different iterations
+				ferror_max = max(ferror_max,f_error)
+			end
+		end
+		# Check overall error between value's values at different iterations
+		error = norm(v-v_new)/norm(v)
+		#if f_error < tolerance
+		if ferror_max < tolerance
+			t_stop = t
+			break
+		end
+		if verbose == true
+		println("iteration = ", t, ", error = ", error, ", max function error = ", ferror_max)
+		end
+		v = deepcopy(v_new)
+	end
+	v_new,error,t_stop
+end
+
 # ╔═╡ bbe19356-e00b-4d90-b704-db33e0b75743
-ip_b = inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-50,-10,0,10,50], max_x = 2.4, max_v = 3, nactions = 5, γ = 0.96)
+ip_b = inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-40,-10,0,10,40], max_x = 1.8, max_v = 6, nactions = 5, γ = 0.98)
 
 # ╔═╡ b38cdb2b-f570-41f4-8996-c7e41551f374
 function draw_cartpole(xposcar,xs,ys,t,xlimit,ip::inverted_pendulum_borders)
 	hdim = 400
 	vdim = 200
 	size = 2
+	verts = [(-size,-size/2),(size,-size/2),(size,size/2),(-size,size/2)]
+	#Draw car
+	pcar = plot(xticks = false, yticks = false,xlim = (-xlimit-0.3,xlimit+0.3),ylim = (-0.2, ip.l + 0.05), grid = false, axis = false,legend = false)
+	#Plot arena
+	plot!(pcar, [-xlimit-0.2,xlimit+0.2], [-0.1,-0.1], color = :black)
+	plot!(pcar, [-xlimit-0.3,-xlimit-0.2], [0.2*ip.l,0.2*ip.l], color = :black)
+	plot!(pcar, [xlimit+0.2,xlimit+0.3], [0.2*ip.l,0.2*ip.l], color = :black)
+	plot!(pcar, [-xlimit-0.2,-xlimit-0.2], [-0.1,0.2*ip.l], color = :black)
+	plot!(pcar, [xlimit+0.2,xlimit+0.2], [-0.1,0.2*ip.l], color = :black)
+	#Draw pole
+	plot!(pcar,xs[t],ys[t],marker = (:none, 1),linewidth = 2., linecolor = :black)
+	#Draw cart
+	plot!(pcar,xposcar[t],[0.04],marker = (Shape(verts),26),mswidth = 0,color = :pink)
+	#draw_actions
+	actions,_ = adm_actions_b(State(u = 2),ip)
+	arrow_x = zeros(length(actions))
+	arrow_y = zeros(length(actions))
+	aux = actions
+	for i in 1:length(aux)
+		mult = 0.03
+		if i == 1 || i == 5
+			mult = 0.02
+		end
+		arrow_x[i] = aux[i]*mult
+		arrow_y[i] = 0#aux[i][2]*mult*1.3
+	end
+	quiver!(pcar,ones(Int64,length(aux))*xposcar[t][1],[0.01,0.06,0.04,0.06,0.01],quiver = (arrow_x,arrow_y),color = "black",linewidth = 2)
+	scatter!(pcar,xposcar[t],[0.04],markersize = 10,color = "black")
+	#draw middle of arena
+	scatter!(pcar,[0.0],[-0.14],markershape = :vline,color = "black",markersize = 5)
+	plot(pcar, size = (hdim,vdim),margin=4Plots.mm)
+	
+	
+end
+
+# ╔═╡ 79372251-157d-43a0-9560-4727fbd36ea9
+function draw_cartpole_time(xposcar,xs,ys,xlimit,maxtime,step,ip::inverted_pendulum_borders)
+	hdim = 500
+	vdim = 200
+	size = 1
 	verts = [(-size,-size/2),(size,-size/2),(size,size/2),(-size,size/2)]
 	#Draw car
 	pcar = plot(xticks = false, yticks = false,xlim = (-xlimit-0.3,xlimit+0.3),ylim = (-0.1, ip.l + 0.05), grid = false, axis = false,legend = false)
@@ -370,41 +404,32 @@ function draw_cartpole(xposcar,xs,ys,t,xlimit,ip::inverted_pendulum_borders)
 	plot!(pcar, [xlimit+0.2,xlimit+0.3], [0.2*ip.l,0.2*ip.l], color = :black)
 	plot!(pcar, [-xlimit-0.2,-xlimit-0.2], [-0.1,0.2*ip.l], color = :black)
 	plot!(pcar, [xlimit+0.2,xlimit+0.2], [-0.1,0.2*ip.l], color = :black)
-	#Draw pole
-	plot!(pcar,xs[t],ys[t],marker = (:none, 1),linewidth = 2.5, linecolor = :black)
-	#Draw cart
-	plot!(pcar,xposcar[t],[0],marker = (Shape(verts),30),color = :pink)
-	#draw_actions
-	actions,_ = adm_actions_b(State(u = 2),ip)
-	arrow_x = zeros(length(actions))
-	arrow_y = zeros(length(actions))
-	aux = actions
-	for i in 1:length(aux)
-		mult = 0.03
-		arrow_x[i] = aux[i]*mult
-		arrow_y[i] = 0#aux[i][2]*mult*1.3
+	for t in 1:step:maxtime
+		#Draw pole
+		plot!(pcar,xs[t],ys[t],marker = (:none, 1),linewidth = 1, linecolor = :black,alpha = 0.1)
+		#Draw cart
+		plot!(pcar,xposcar[t],[0],marker = (Shape(verts),30),alpha = 0.1 ,color = :pink)
 	end
-	quiver!(pcar,ones(Int64,length(aux))*xposcar[t][1],[0,0.04,0.4,0.04,0.0],quiver = (arrow_x,arrow_y),color = "black",linewidth = 2)
-	scatter!(pcar,xposcar[t],[0.02],markersize = 10,color = "black")
-	plot(pcar, size = (hdim,vdim),margin=4Plots.mm)
+	plot(pcar, size = (hdim,vdim),margin=6Plots.mm)
 end
 
 # ╔═╡ 10a47fa8-f235-4455-892f-9b1457b1f82c
 function draw_cartpole_timeright(xposcar,xs,ys,maxtime,step,ip::inverted_pendulum_borders)
-	hdim = 800
-	vdim = 120
-	size = 0.2
-	Δx = 0.006/step
-	verts = [(-size,-size/2),(size,-size/2),(size,size/2),(-size,size/2)]
+	hdim = 500
+	vdim = 100
+	size_cart = 0.1
+	Δx = 1/maxtime #0.01#hdim/maxtime#0.007/step
+	verts = [(-size_cart,-size_cart/2),(size_cart,-size_cart/2),(size_cart,size_cart/2),(-size_cart,size_cart/2)]
 	#Initialize car plot
 	pcar = plot(xticks = false, yticks = false,xlim = (0,maxtime*Δx),ylim = (-0.1, ip.l + 0.05), grid = false, axis = false,legend = false)
 	for t in 1:step:maxtime
 		#Draw pole
-		plot!(pcar,[0,xs[t][2]-xs[t][1]]+[t*Δx,t*Δx],ys[t],marker = (:none, 1),linewidth = 1.2, linecolor = :black,alpha = 0.3)
+		#plot!(pcar,[0,xs[t][2]-xs[t][1]]+[t*Δx,t*Δx],ys[t],marker = (:none, 1),linewidth = 1.2, linecolor = :black,alpha = 0.3)
+		plot!(pcar,[0,xs[t][2]-xs[t][1]]*0.2+[t*Δx,t*Δx],ys[t],marker = (:none, 1),linewidth = 1.2, linecolor = :black,alpha = 0.3)
 		#Draw cart
-		plot!(pcar,xposcar[t] +[t*Δx],[0],marker = (Shape(verts),30),alpha = 0.5 ,color = :pink)
+		plot!(pcar,0*xposcar[t] +[t*Δx],[0],marker = (Shape(verts),30),alpha = 0.5 ,color = "#A05A2C")
 	end
-	plot(pcar, size = (hdim,vdim),margin=3Plots.mm)
+	plot(pcar, size = (hdim,vdim),margin=1Plots.mm)
 end
 
 # ╔═╡ e099528b-37a4-41a2-836b-69cb3ceda2f5
@@ -412,11 +437,26 @@ md" ## Value iteration"
 
 # ╔═╡ 6b9b1c38-0ed2-4fe3-9326-4670a33e7765
 #Tolerance for iteration, supremum norm
-tolb = 1E-3
+tolb = 1E-1
+
+# ╔═╡ 7c04e2c3-4157-446d-a065-4bfe7d1931fd
+begin
+#To calculate value, uncomment, it takes around 30 minutes for 1.8E6 states
+#h_value,error,t_stop= iteration(ip_b,tolb,1200,δ = δ_r);
+#writedlm("h_value_g_$(ip_q.γ)_nstates_$(ip_b.nstates).dat",h_value)
+#Read from compressed file
+	# h_zip = ZipFile.Reader("h_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat.zip")
+	# h_value = readdlm(h_zip.files[1], Float64)
+	#h_value = readdlm("values_borders/h_value_nstates_$(ip_b.nstates)_xlim_2.4.dat");
+	h_value = readdlm("values/h_value_g_$(ip_b.γ)_nstates_$(ip_b.nstates).dat");
+end;
 
 # ╔═╡ a0b85a14-67af-42d6-b231-1c7d0c293f6e
 #If value calculated, this code stores the value in a dat file
-#writedlm("h_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat",h_value)
+#writedlm("values/h_value_g_$(ip_b.γ)_nstates_$(ip_b.nstates).dat",h_value)
+
+# ╔═╡ 8a59e209-9bb6-4066-b6ca-70dac7da33c3
+h_value_int = interpolate_value(h_value,ip_b);
 
 # ╔═╡ 08ecfbed-1a7c-43d4-ade7-bf644eeb6eee
 function create_episode_b(state_0,int_value,max_t,env::inverted_pendulum_borders)
@@ -449,10 +489,10 @@ function create_episode_b(state_0,int_value,max_t,env::inverted_pendulum_borders
 		if state.u == 1
 			break
 		end
-		ids_dstate,discretized_state = discretize_state(state,env)
-		id_dstate = build_index_b(ids_dstate,env)
+		#ids_dstate,discretized_state = discretize_state(state,env)
+		#id_dstate = build_index_b(ids_dstate,env)
 		push!(values,int_value(state.θ,state.w,state.u,state.v,state.x))
-		actions,policy = optimal_policy_b(discretized_state,state,int_value,env)
+		actions,policy = optimal_policy_b(state,int_value,env)
 		#Choosing the action with highest prob (empowerement style)
 		#idx = findmax(policy)[2] 
 		#Choosing action randomly according to policy
@@ -480,9 +520,9 @@ interval = collect(-0.5:0.1:0.5).*pi/180
 state_0_anim = State(θ = rand(interval),x = rand(interval), v = rand(interval),w = rand(interval),u=2)
 
 # ╔═╡ 24a4ba06-d3ae-4c4b-9ab3-3852273c2fd4
-function animate_w_borders(xposcar,xs,ys,xlimit,maxt,values,entropies,ip::inverted_pendulum_borders,plot_with_values = true)
-	hdim = 1200
-	vdim = 600
+function animate_w_borders(xposcar,xs,ys,xlimit,maxt,values,entropies,ip::inverted_pendulum_borders,plot_with_values = true; title = "")
+	hdim = 800
+	vdim = 300
 	frac_for_cartpole = 0.6
 	size = 1.5
 	verts = [(-size,-size/2),(size,-size/2),(size,size/2),(-size,size/2)]
@@ -509,14 +549,53 @@ function animate_w_borders(xposcar,xs,ys,xlimit,maxt,values,entropies,ip::invert
 		if plot_with_values == true
 			plot(pcar,pacc,pent, layout = Plots.grid(3, 1, heights=[frac_for_cartpole,(1-frac_for_cartpole)/2,(1-frac_for_cartpole)/2]), size = (hdim,vdim),margin=6Plots.mm)
 		else
-			plot(pcar, size = (700,200),margin=5Plots.mm)
+			plot(pcar, title = title, size = (700,200),margin=5Plots.mm)
+		end
+	end
+	anim
+end
+
+# ╔═╡ 8b38bccf-a762-439e-b19b-65e803d3c8f6
+function animate_both(xposcarh,xsh,ysh,xposcarr,xsr,ysr,xlimit,maxt,ϵ,ip::inverted_pendulum_borders;with_title = true)
+	hdim = 700
+	vdim = 400
+	size = 1.5
+	verts = [(-size,-size/2),(size,-size/2),(size,size/2),(-size,size/2)]
+	anim = @animate for t in 1:maxt
+		pcarh = plot(xticks = false, yticks = false,xlim = (-2.2,2.2),ylim = (-0.1, ip.l + 0.05), grid = false, axis = false,legend = false)
+		pcarr = plot(xticks = false, yticks = false,xlim = (-2.2,2.2),ylim = (-0.1, ip.l + 0.05), grid = false, axis = false,legend = false)
+		#Plot arena
+		plot!(pcarh, [-xlimit-0.2,xlimit+0.2], [-0.1,-0.1], color = :black)
+		plot!(pcarh, [-xlimit-0.3,-xlimit-0.2], [0.2*ip.l,0.2*ip.l], color = :black)
+		plot!(pcarh, [xlimit+0.2,xlimit+0.3], [0.2*ip.l,0.2*ip.l], color = :black)
+		plot!(pcarh, [-xlimit-0.2,-xlimit-0.2], [-0.1,0.2*ip.l], color = :black)
+		plot!(pcarh, [xlimit+0.2,xlimit+0.2], [-0.1,0.2*ip.l], color = :black)
+		#Plot arena
+		plot!(pcarr, [-xlimit-0.2,xlimit+0.2], [-0.1,-0.1], color = :black)
+		plot!(pcarr, [-xlimit-0.3,-xlimit-0.2], [0.2*ip.l,0.2*ip.l], color = :black)
+		plot!(pcarr, [xlimit+0.2,xlimit+0.3], [0.2*ip.l,0.2*ip.l], color = :black)
+		plot!(pcarr, [-xlimit-0.2,-xlimit-0.2], [-0.1,0.2*ip.l], color = :black)
+		plot!(pcarr, [xlimit+0.2,xlimit+0.2], [-0.1,0.2*ip.l], color = :black)
+		if t <= maxt
+			#excess = abs(xposcar[t][1]) - 1
+			plot!(pcarh,xsh[t],ysh[t],marker = (:none, 1),linewidth = 2, linecolor = :black)
+			plot!(pcarr,xsr[t],ysr[t],marker = (:none, 1),linewidth = 2, linecolor = :black)
+			plot!(pcarh,xposcarh[t],[0],marker = (Shape(verts),30), color = "#A05A2C")
+			plot!(pcarr,xposcarr[t],[0],marker = (Shape(verts),30), color = "#A05A2C")
+		#scatter!(ptest,xs[t],ys[t],markersize = 50)
+		#plot!(ptest,xticks = collect(0.5:env1.sizex+0.5), yticks = collect(0.5:env1.sizey+0.5), gridalpha = 0.8, showaxis = false, ylim=(0.5,env1.sizey +0.5), xlim=(0.5,env1.sizex + 0.5))
+		end
+		if with_title == true
+			plot(pcarh,pcarr, size = (hdim,vdim),margin=5Plots.mm,layout = Plots.grid(2, 1, heigths=[0.5,0.5]), title=["H agent" "R agent, ϵ = $(ϵ)"])
+		else
+			plot(pcarh,pcarr, size = (hdim,vdim),margin=5Plots.mm,layout = Plots.grid(2, 1, heigths=[0.5,0.5]))
 		end
 	end
 	anim
 end
 
 # ╔═╡ 63fe2f55-f5ce-4022-99ee-3bd4e14e6352
-md"Produce animations? $(@bind movies CheckBox(default = false))"
+md"Produce animations for each? $(@bind movies CheckBox(default = false))"
 
 # ╔═╡ 6107a0ce-6f01-4d0b-bd43-78f2125ac185
 md"# R agents (reward maximizer)"
@@ -532,7 +611,7 @@ function reachable_rewards(state,action,env::inverted_pendulum_borders,δ = 1E-5
 end
 
 # ╔═╡ e181540d-4334-47c4-b35d-99023c89a2c8
-function Q_iteration(env::inverted_pendulum_borders, ϵ = 0.01, tolerance = 1E-2, n_iter = 100; δ = 1E-5)
+function Q_iteration(env::inverted_pendulum_borders, ϵ = 0.01, tolerance = 1E-2, n_iter = 100; δ = 1E-5,verbose = false)
 	v = zeros(env.nstates)
 	v_new = zeros(env.nstates)
 	t_stop = n_iter
@@ -541,26 +620,28 @@ function Q_iteration(env::inverted_pendulum_borders, ϵ = 0.01, tolerance = 1E-2
 	for t in 1:n_iter
 		f_error = 0
 		ferror_old = 0
+		v_itp = interpolate_value(v,env)
 		Threads.@threads for idx_θ in 1:env.sizeθ
 		#Threads.@spawn for idx_θ in 1:env.sizeθ,idx_w in 1:env.sizew, idx_u in 1:env.sizeu, idx_v in 1:env.sizev, idx_x in 1:env.sizex
 			for idx_w in 1:env.sizew, idx_u in 1:env.sizeu, idx_v in 1:env.sizev, idx_x in 1:env.sizex
 				state_idx = [idx_θ,idx_w,idx_u,idx_v,idx_x]
 				state = State(θ = env.θs[idx_θ], w = env.ws[idx_w], u = idx_u, v = env.vs[idx_v], x = env.xs[idx_x])
 				i = build_index_b(state_idx,env)
-				v_old = deepcopy(v[i])
+				#v_old = deepcopy(v[i])
 				#println("v before = ", v[i])
 				actions,ids_actions = adm_actions_b(state,env)
 				values = zeros(length(actions))
 				for (id_a,a) in enumerate(actions)
-					s_primes_ids,states_p = reachable_states_b(state,a,env)
+					#s_primes_ids,states_p = reachable_states_b(state,a,env)
+					states_p = [real_transition(state,a,env)]
 					rewards = reachable_rewards(state,a,env,δ)
 					#state_p = transition_b(state,a,env)[2]
-					for (idx,s_p) in enumerate(s_primes_ids)
+					for (idx,s_p) in enumerate(states_p)
 						#rewards = reachable_rewards(states_p[idx],a,env)
-						i_p = build_index_b(s_p,env)
+						#i_p = build_index_b(s_p,env)
 						for r in rewards
 							#deterministic environment
-							values[id_a] += r + env.γ*v[i_p]
+							values[id_a] += r + env.γ*v_itp(s_p.θ,s_p.w,s_p.u,s_p.v,s_p.x)
 						end
 					end
 				end
@@ -577,34 +658,36 @@ function Q_iteration(env::inverted_pendulum_borders, ϵ = 0.01, tolerance = 1E-2
 			t_stop = t
 			break
 		end
-		println("iteration = ", t, ", error = ", error, ", max function error = ", ferror_old)
+		if verbose == true
+			println("iteration = ", t, ", error = ", error, ", max function error = ", ferror_old)
+		end
 		v = deepcopy(v_new)
 	end
 	v,error,t_stop
 end
 
 # ╔═╡ 31a1cdc7-2491-42c1-9988-63650dfaa3e3
-function optimal_policy_q(dstate,state,value,ϵ,env::inverted_pendulum_borders,interpolation = true)
-	actions,ids_actions = adm_actions_b(dstate,env)
+function optimal_policy_q(state,value,ϵ,env::inverted_pendulum_borders,interpolation = true)
+	actions,ids_actions = adm_actions_b(state,env)
 	values = zeros(length(actions))
 	policy = zeros(length(actions))
 	#print("actions = ", actions)
 	#state_index = build_nonflat_index_b(state,env)
 	#id_state = build_index_b(state_index,env)
 	for (idx,a) in enumerate(actions)
-		s_primes_ids,states_p = reachable_states_b(state,a,env)
+		#s_primes_ids,states_p = reachable_states_b(state,a,env)
 		s_prime = real_transition(state,a,env)
 		rewards = reachable_rewards(state,a,env)
 		#for (id_sp,s_p) in enumerate(s_primes_ids)
 			for r in rewards
-				if interpolation == true
+				#if interpolation == true
 					#interpolated value
 					values[idx] += r + env.γ*value(s_prime.θ,s_prime.w,s_prime.u,s_prime.v,s_prime.x)
-				else
+				#else
 					#deterministic environment
-					i_p = build_index_b(s_primes_ids[1],env)
-					values[idx] += r + env.γ*value[i_p]
-				end
+					#i_p = build_index_b(s_primes_ids[1],env)
+					#values[idx] += r + env.γ*value[i_p]
+				#end
 			end
 		#end
 	end
@@ -627,27 +710,51 @@ function optimal_policy_q(dstate,state,value,ϵ,env::inverted_pendulum_borders,i
 end
 
 # ╔═╡ 87c0c3cb-7059-42ae-aed8-98a0ef2eb55f
-ip_q = inverted_pendulum_borders(M = 1.0, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, a_s = [-50,-10,0,10,50], max_θ = 0.62, max_x = 2.4, max_v = 3, max_w = 3, nactions = 5, γ = 0.96)
+ip_q = ip_b #same enviromment than H agent
+#inverted_pendulum_borders(M = 1.0, m = 0.1,l = 1.,Δt = 0.02, sizeθ = ip_b.sizex, sizew = ip_b.sizew,sizev = ip_b.sizev, sizex = ip_b.sizex, a_s = [-50,-10,0,10,50], max_θ = ip_b.max_θ, max_x = 2.4, max_v = 3, max_w = 3, nactions = 5, γ = ip_b.γ)
 
-# ╔═╡ 7c04e2c3-4157-446d-a065-4bfe7d1931fd
+# ╔═╡ f9b03b4d-c521-4456-b0b9-d4a301d8a813
+md" ## Value iteration"
+
+# ╔═╡ 355db008-9661-4e54-acd5-7c2c9ba3c7f5
+tol = 1E-2
+
+# ╔═╡ 8a6b67d0-8008-4a4c-be7c-0c0b76311385
+ϵ_try = 0.0
+
+# ╔═╡ c2105bee-c29d-4853-9388-31c405283395
+#not important 
+δ_r = 0.0
+
+# ╔═╡ 564cbc7a-3125-4b67-843c-f4c74ccef51f
 begin
 #To calculate value, uncomment, it takes around 30 minutes for 1.8E6 states
-#h_value,error,t_stop= iteration(ip_b,tolb,1200,δ = 1E-5)
-#writedlm("h_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat",h_value)
+#q_value, q_error, q_stop = Q_iteration(ip_q,ϵ_try,tol,1200,δ = δ_r,verbose = false)
+#Otherwise, read from file
 #Read from compressed file
-	# h_zip = ZipFile.Reader("h_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat.zip")
-	# h_value = readdlm(h_zip.files[1], Float64)
-	h_value = readdlm("h_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat")
+	#q_zip = ZipFile.Reader("q_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat.zip")
+	#q_value = readdlm(q_zip.files[1], Float64)
+	#q_value = readdlm("values_borders/q_value_eps_$(ϵ_try)_nstates_$(ip_q.nstates)_xlim_2.4.dat");
+	q_value = readdlm("values/q_value_g_$(ip_b.γ)_eps_$(ϵ_try)_nstates_$(ip_q.nstates).dat")
 end
 
-# ╔═╡ 8a59e209-9bb6-4066-b6ca-70dac7da33c3
-h_value_int = interpolate_value(h_value,ip_b);
+# ╔═╡ 288aa06b-e07b-41cc-a51f-49f780c634b8
+begin
+	b = 2.4
+	ip_border = ip_b #inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-50,-10,0,10,50], max_x = b, max_v = 3, nactions = 5, γ = 0.96)
+	#q_val = readdlm("values_borders/q_value_eps_$(ϵ_try)_nstates_$(ip_border.nstates)_xlim_$(b).dat")
+	#h_val = readdlm("values_borders/h_value_nstates_$(ip_border.nstates)_xlim_$(b).dat")
+	q_val = q_value
+	h_val = h_value
+	q_val_int = interpolate_value(q_val,ip_border)
+	h_val_int = interpolate_value(h_val,ip_border)
+end;
 
 # ╔═╡ 9230de54-3ee3-4242-bc34-25a38edfbb6b
 begin
-	max_t_h_anim = 1500
+	max_t_h_anim = 1000
 	#state0_h_anim = State(θ = 0.001, u = 2)
-	xs_h_anim, ys_h_anim, xposcar_h_anim, thetas_ep_h_anim, ws_ep_h_anim, us_ep_h_anim, vs_ep_h_anim, actions_h_anim, values_h_anim, entropies_h_anim = create_episode_b(state_0_anim,h_value_int,max_t_h_anim, ip_b)
+	xs_h_anim, ys_h_anim, xposcar_h_anim, thetas_ep_h_anim, ws_ep_h_anim, us_ep_h_anim, vs_ep_h_anim, actions_h_anim, values_h_anim, entropies_h_anim = create_episode_b(state_0_anim,h_val_int,max_t_h_anim, ip_border)
 	length(xposcar_h_anim)
 end
 
@@ -660,9 +767,12 @@ begin
 	#savefig("cartpole_draw.pdf")
 end
 
+# ╔═╡ 2f1b6992-3082-412d-b966-2b4b278b2ed0
+draw_cartpole_time(xposcar_h_anim,xs_h_anim,ys_h_anim,ip_b.max_x,200,1,ip_b)
+
 # ╔═╡ a54788b9-4b1e-4066-b963-d04008bcc242
 begin
-	draw_cartpole_timeright(xposcar_h_anim,xs_h_anim,ys_h_anim,1200,1,ip_b)
+	draw_cartpole_timeright(xposcar_h_anim,xs_h_anim,ys_h_anim,800,1,ip_b)
 	#savefig("h_frozen_movie2.pdf")
 end
 
@@ -674,30 +784,12 @@ end
 
 # ╔═╡ c087392c-c411-4368-afcc-f9a104856884
 if movies == true
-gif(anim_b,fps = Int(1/ip_b.Δt),"episode_h_agent.gif")
-end
-
-# ╔═╡ f9b03b4d-c521-4456-b0b9-d4a301d8a813
-md" ## Value iteration"
-
-# ╔═╡ 355db008-9661-4e54-acd5-7c2c9ba3c7f5
-tol = 1E-3
-
-# ╔═╡ 564cbc7a-3125-4b67-843c-f4c74ccef51f
-begin
-#To calculate value, uncomment, it takes around 30 minutes for 1.8E6 states
-	# ϵ_try = 0.5
-	# q_value, q_error, q_stop = Q_iteration(ip_q,ϵ_try,tol,1200,δ = 1E-3)
-#Otherwise, read from file
-#Read from compressed file
-	#q_zip = ZipFile.Reader("q_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat.zip")
-	#q_value = readdlm(q_zip.files[1], Float64)
-	q_value = readdlm("q_value_eps_0.0_nstates_$(ip_q.nstates).dat")
+gif(anim_b,fps = Int(1/ip_b.Δt))#,"episode_h_agent.gif")
 end
 
 # ╔═╡ d20c1afe-6d5b-49bf-a0f2-a1bbb21c709f
 #If calculated, this line writes the value function in a file
-#writedlm("q_value_g_$(ip_q.γ)_nstates_$(ip_q.nstates).dat",q_value)
+#writedlm("values/q_value_eps_$(ϵ_try)_nstates_$(ip_q.nstates).dat",q_value)
 
 # ╔═╡ e9687e3f-be56-44eb-af4d-f169558de0fd
 q_value_int = interpolate_value(q_value,ip_q);
@@ -733,14 +825,14 @@ function create_episode_q(state_0,value,ϵ,max_t,env::inverted_pendulum_borders,
 		push!(us,state.u)
 		#actions_at_s,_ = adm_actions_b(state,env)
 		# policy = ones(length(actions))./length(actions)
-		ids_dstate,discretized_state = discretize_state(state,env)
-		id_dstate = build_index_b(ids_dstate,env)
-		if interpolation == true
+		#ids_dstate,discretized_state = discretize_state(state,env)
+		#id_dstate = build_index_b(ids_dstate,env)
+		#if interpolation == true
 			push!(values,value(state.θ,state.w,state.u,state.v,state.x))
-		else
-			push!(values,value[id_dstate])
-		end
-		actions_at_s,policy,n_best_actions = optimal_policy_q(discretized_state,state,value,ϵ,env,interpolation)
+		#else
+		#	push!(values,value[id_dstate])
+		#end
+		actions_at_s,policy,n_best_actions = optimal_policy_q(state,value,ϵ,env)
 		#Choosing action randomly from optimal action set according to policy
 		#action = rand(actions)
 		#ϵ-greedy: with prob ϵ choose a random action from action set
@@ -779,31 +871,22 @@ end
 # ╔═╡ 4893bf14-446c-46a7-b695-53bac123ff99
 md" ## Animation"
 
-# ╔═╡ e2ef77de-f986-49c5-bf36-4b9062eedb66
-md"Produce animation for both agents? $(@bind bothagents_anim CheckBox(default = false))"
-
-# ╔═╡ 90aff8bb-ed69-40d3-a22f-112f713f4b93
-md"# Comparison between H and R agents"
-
-# ╔═╡ 4fad0692-05dc-4c3b-9aae-cd9a43519e51
-md"## ϵ-greedy policy survival rate analysis"
-
-# ╔═╡ 973b56e5-ef3c-4328-ad26-3ab63650537e
-ϵs_totry = [0.0,0.05,0.1,0.15,0.2]
-
 # ╔═╡ 7edf8ddf-2b6e-4a4b-8181-6b8bbdd22841
 begin
-	max_t_q_anim = 1500
+	max_t_q_anim = max_t_h_anim#1500
 	state0_q_anim = state_0_anim#State(θ = 0,x = 0, v = 0,w = 0, u = 2) #state_0_anim
-	ϵ_anim = ϵs_totry[1]
-	xs_q_anim, ys_q_anim, xposcar_q_anim, thetas_ep_q_anim, ws_ep_q_anim, us_ep_q_anim, vs_ep_q_anim, actions_q_anim, values_q_anim, entropies_q_anim,rewards_q_anim = create_episode_q(state0_q_anim,q_value_int,ϵ_anim,max_t_q_anim, ip_q, interpolation)
+	ϵ_anim = 0.0 #ϵ_try
+	xs_q_anim, ys_q_anim, xposcar_q_anim, thetas_ep_q_anim, ws_ep_q_anim, us_ep_q_anim, vs_ep_q_anim, actions_q_anim, values_q_anim, entropies_q_anim,rewards_q_anim = create_episode_q(state0_q_anim,q_val_int,ϵ_anim,max_t_q_anim, ip_border, interpolation)
 	length(xposcar_q_anim)
 end
 
+# ╔═╡ aa4229d3-e221-4a87-8a18-ed376d33d3ac
+draw_cartpole_time(xposcar_q_anim,xs_q_anim,ys_q_anim,ip_b.max_x,200,1,ip_b)
+
 # ╔═╡ 69128c7a-ddcb-4535-98af-24fc91ec0b7e
 begin
-	draw_cartpole_timeright(xposcar_q_anim,xs_q_anim,ys_q_anim,1200,1,ip_b)
-	#savefig("q_frozen_movie2.pdf")
+	draw_cartpole_timeright(xposcar_q_anim,xs_q_anim,ys_q_anim,800,1,ip_b)
+	#savefig("q_frozen_movie_eps0.0.pdf")
 end
 
 # ╔═╡ c98025f8-f942-498b-9368-5d524b141c62
@@ -813,32 +896,44 @@ end
 
 # ╔═╡ d8642b83-e824-429e-ac3e-70e875a47d1a
 if movies == true
-gif(anim_q,fps = Int(round(1/ip_q.Δt)),"episode_q_agent_epsilon_$(ϵ_anim)_g_$(ip_q.γ).gif")
+gif(anim_q,fps = Int(round(1/ip_q.Δt)),"episode_q_agent_epsilon_$(ϵ_anim)_g_$(ip_q.γ)_wvalues.gif")
 end
 
+# ╔═╡ 90aff8bb-ed69-40d3-a22f-112f713f4b93
+md"# Comparison between H and R agents"
+
+# ╔═╡ 85e789c6-8322-4264-ab70-dc33d64c4de4
+md"Produce animation for both? $(@bind movie_both CheckBox(default = false))"
+
+# ╔═╡ 4fad0692-05dc-4c3b-9aae-cd9a43519e51
+md"## ϵ-greedy policy survival rate analysis"
+
+# ╔═╡ 973b56e5-ef3c-4328-ad26-3ab63650537e
+ϵs_totry = [0.0,0.05,0.1,0.15,0.2,0.25,0.3,0.33,0.35,0.4]
+
 # ╔═╡ 3d567640-78d6-4f76-b13e-95be6d5e9c64
-begin
-	#Calculate values for R agent, for several ϵs
-	ϵs_to_compute_value = [0.25,0.3,0.35,0.4]
+# begin
+# 	#Calculate q values for several ϵs
+# 	ϵs_to_compute_value = [0.22] #ϵs_totry #[0.25,0.3,0.35,0.4]
 # 	for (i,ϵ) in enumerate(ϵs_to_compute_value)
 # 		println("epsilon = ", ϵ)
-# 		q_val, _, _ = Q_iteration(ip_q,ϵ,tol,1200,δ = 1E-5)
-# 		writedlm("q_value_eps_$(ϵ)_nstates_$(ip_q.nstates).dat",q_val)
+# 		q_val, _, _ = Q_iteration(ip_q,ϵ,tol,1200,δ = δ_r)
+# 		writedlm("values/q_value_g_$(ip_q.γ)_eps_$(ϵ)_nstates_$(ip_q.nstates).dat",q_val)
 # 	end
-end
+# end
 
 # ╔═╡ 06f064cf-fc0d-4f65-bd6b-ddb6e4154f6c
 begin
 	max_time = 10000
 	num_episodes = 1000
-	ϵs = [0.0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4] #ϵs_totry# [0.0,0.001,0.01,0.05] 
-	#To compute the survival times for various epsilon-greedy R agents, it takes a long time
+	ϵs = [0.0,0.05,0.1,0.15,0.2,0.22,0.25,0.3] #ϵs_totry# [0.0,0.001,0.01,0.05] 
+	# #To compute the survival times for various epsilon-greedy Q agents, it takes a bit less than 10 min
 	# survival_pcts = zeros(length(ϵs),num_episodes)
 	# for (i,ϵ) in enumerate(ϵs)
-	# 	q_val = readdlm("q_value_eps_$(ϵ)_nstates_$(ip_q.nstates).dat")
+	# 	q_val = readdlm("values/q_value_g_$(ip_b.γ)_eps_$(ϵ)_nstates_$(ip_q.nstates).dat")
 	# 	q_val_int = interpolate_value(q_val,ip_q)
 	# 	Threads.@threads for j in 1:num_episodes
-	# 		println("j = ", j)
+	# 		#println("j = ", j)
 	# 		state0 = State(θ = rand(interval),x = rand(interval), v = rand(interval),w = rand(interval), u = 2)
 	# 		xs_q, ys_q, xposcar_q, thetas_ep_q, ws_ep_q, us_ep_q, vs_ep_q, actions_q = create_episode_q(state0, q_val_int, ϵ, max_time, ip_q, interpolation)
 	# 		#survival_timesq[j] = length(xposcar_q)
@@ -847,59 +942,71 @@ begin
 	# 		#end
 	# 	end
 	# end
-	#writedlm("survival_pcts_Q_epsilon_short.dat",survival_pcts)
+	# writedlm("survivals/survival_pcts_R_g_$(ip_b.γ)_epsilon_maxtime_$(max_time)_nstates_$(ip_b.nstates).dat",survival_pcts)
 	
-	#Computes it for H agent
-	# survival_times = zeros(num_episodes)
+	# # #Computes it for H agent
+	# survival_H = zeros(num_episodes)
 	# Threads.@threads for i in 1:num_episodes
 	# 	state0_b = State(θ = rand(interval),x = rand(interval), v = rand(interval),w = rand(interval), u = 2)
 	# 	xs_b, ys_b, xposcar_b, thetas_ep_b, ws_ep_b, us_ep_b, vs_ep_b, actions_b = create_episode_b(state0_b,h_value_int,max_time, ip_b)
-	# 	survival_times[i] = length(xposcar_b)
+	# 	survival_H[i] = length(xposcar_b)
 	# end
-
-	#Otherwise, read from file
-	survival_pcts = readdlm("survival_pcts_Q_epsilon_short.dat")
-	survival_H = readdlm("survival_pcts_H.dat")
+	# writedlm("survivals/survival_pcts_H_g_$(ip_b.γ)_nstates_$(ip_b.nstates).dat",survival_H)
+	
+	# #Otherwise, read from file
+	survival_pcts = readdlm("survivals/survival_pcts_R_g_$(ip_b.γ)_epsilon_maxtime_$(max_time)_nstates_$(ip_b.nstates).dat")
+	 survival_H = readdlm("survivals/survival_pcts_H_g_$(ip_b.γ)_nstates_$(ip_b.nstates).dat")
 end;
-
-# ╔═╡ e2f1952d-8fc8-4749-9a88-bf5c61758e14
-#writedlm("survival_pcts_Q_epsilon_short.dat",survival_pcts)
-
-# ╔═╡ 2bd1d018-986b-4370-95ba-e047e2c7b691
-# begin
-# 		#Computes it for H agent
-# 		survival_times_H = zeros(num_episodes)
-# 		Threads.@threads for i in 1:num_episodes
-# 			state0_b = State(θ = rand(interval),x = rand(interval), v = rand(interval),w = rand(interval), u = 2)
-# 			xs_b, ys_b, xposcar_b, thetas_ep_b, ws_ep_b, us_ep_b, vs_ep_b, actions_b = create_episode_b(state0_b,h_value_int,max_time, ip_b)
-# 			survival_times_H[i] = length(xposcar_b)
-# 		end
-# end
-
-# ╔═╡ 489c807d-2db1-4d9e-9e30-cab403b9281f
-#writedlm("survival_pcts_H.dat",survival_times_H)
 
 # ╔═╡ ac43808a-ef2a-472d-9a9e-c77257aaa535
 survival_Q = survival_pcts
 
+# ╔═╡ da37a5c8-b8ef-4131-a153-50c21461d9c4
+# begin
+# 	survival_Q_extra = zeros(5,10000)
+# 	survival_Q_extra[1:3,:] = survival_Q[1:3,:]
+# 	survival_Q_extra[4,:] = survival_pcts
+# 	survival_Q_extra[5,:] = survival_Q[4,:]
+# end
+
+# ╔═╡ a8b1a61c-6bd0-417b-8d58-8c8f8d77da7e
+#writedlm("survival_pcts_Q_agent.dat",survival_Q_extra)
+
 # ╔═╡ 1a6c956e-38cc-4217-aff3-f303af0282a4
 md"Density plot? $(@bind density CheckBox(default = false))"
+
+# ╔═╡ e169a987-849f-4cc2-96bc-39f234742d93
+begin
+	bd = 2000
+	surv_hists = plot(xlabel = "Survived time steps", xticks = [10000,50000,100000])
+	if density == true
+		plot!(surv_hists,ylabel = "Density")
+		density!(surv_hists, bandwidth = bd, survival_H,label = "H agent",linewidth = 2)
+	else
+		plot!(surv_hists,ylabel = "Normalized frequency")
+		plot!(surv_hists,bins = collect(-bd/2:bd:max_time+bd/2),survival_H,st = :stephist, label = "H agent", alpha = 1.0,linewidth = 2,normalized = :probability)
+	end
+	alphas = ones(length(ϵs))
+	for i in 1:length(ϵs)
+		if density == true
+			density!(surv_hists, bandwidth = bd, survival_Q[i,:],label = "ϵ = $(ϵs[i])",linewidth = 2)
+		else
+			plot!(surv_hists,bins = (collect(-bd/2:bd:max_time+bd/2)),survival_Q[i,:],st = :stephist,normalized = :probability,label = "ϵ = $(ϵs[i])",alpha = alphas[i],linewidth = 2)
+		end
+	end
+	plot(surv_hists, grid = true, minorgrid = false, legend_position = :top,margin = 4Plots.mm,size = (500,500))
+	#savefig("q_h_survival_histograms.pdf")
+end
 
 # ╔═╡ ae15e079-231e-4ea2-aabb-ee7d44266c6d
 begin
 	surv_means = plot(xlabel = "ϵ")
-	plot!(surv_means,ylabel = "Fraction of survived time steps")
-	plot!(surv_means, ϵs, mean(survival_H./max_time).*ones(length(ϵs)),label = "H agent",linewidth = 2.5)
-	plot!(surv_means,ϵs,mean(survival_Q./max_time,dims = 2),yerror = std(survival_Q./max_time,dims = 2)./(sqrt(length(survival_Q[1,:]))),markerstrokewidth = 2, linewidth = 2.5,label = "R agent")
-	plot(surv_means, grid = false, legend_position = :best,margin = 2Plots.mm,size = (550,400),bg_legend = :white,fg_legend = :white,fgguide = :black)
-	#savefig("q_h_survival_epsilon_greedy.pdf")
+	plot!(surv_means,ylabel = "Survived time steps",yticks = [9800,10000])
+	plot!(surv_means, ϵs, mean(survival_H).*ones(length(ϵs)),label = "H agent",linewidth = 2.5, color = "blue")#,yerror = std(survival_H./max_time)./sqrt(length(survival_H)))
+	plot!(surv_means,ϵs,mean(survival_Q,dims = 2),yerror = std(survival_Q,dims = 2)./(sqrt(length(survival_Q[1,:]))),markerstrokewidth = 2, linewidth = 2.5,label = "R agent",color = "orange")
+	plot(surv_means, grid = false, legend_position = :bottomleft,margin = 2Plots.mm,size = (450,300),bg_legend = :white,fg_legend = :white,fgguide = :black)
+	#savefig("q_h_survival_epsilon.pdf")
 end
-
-# ╔═╡ 607b3245-53ab-4dca-9c98-8f4b179051e4
-mean(survival_Q,dims = 2)
-
-# ╔═╡ 2b5277cc-011f-4f3f-b860-2bf1dd568d21
-length(survival_Q[1,:])
 
 # ╔═╡ a4b26f44-319d-4b90-8fee-a3ab2418dc47
 md"## State occupancy histograms"
@@ -919,58 +1026,38 @@ begin
 	length(xposcar_b)
 end
 
+# ╔═╡ 2c4375df-5063-43ea-9578-69ec94834362
+ip_b
+
+# ╔═╡ 339a47a1-2b8a-4dc2-9adc-530c53d66fb1
+#To check that cartpole does not exceed maximum speed in discretize state space
+length([vs_ep_b[i] for i in 1:length(vs_ep_b) if vs_ep_b[i]== 6])
+
+# ╔═╡ 8c819d68-3981-4073-b58f-8fde5b73be33
+#To check that cartpole does not exceed maximum angular speed in discretized state space
+length([ws_ep_b[i] for i in 1:length(ws_ep_b) if ws_ep_b[i]==3])
+
 # ╔═╡ b367ccc6-934f-4b18-b1db-05286111958f
 begin
 	max_t_q = time_histograms
 	state0_q = state_0_comp
-	ϵ = 0.0
-	q_value_hist = readdlm("q_value_eps_$(ϵ)_nstates_$(ip_q.nstates).dat")
+	ϵ = 0.25# ϵ_try
+	q_value_hist = readdlm("values/q_value_g_$(ip_b.γ)_eps_$(ϵ)_nstates_$(ip_q.nstates).dat")
 	q_value_int_hist = interpolate_value(q_value_hist,ip_q)
 	xs_q, ys_q, xposcar_q, thetas_ep_q, ws_ep_q, us_ep_q, vs_ep_q, actions_q, values_q, entropies_q,rewards_q = create_episode_q(state0_q,q_value_int_hist,ϵ,max_t_q, ip_q, interpolation)
 	#Check if it survived the whole episode
 	length(xposcar_q)
 end
 
-# ╔═╡ bb26b859-65d4-4c94-b7fb-d7f5f4d0d8a0
-function animate_both(xposcarh,xsh,ysh,xposcarr,xsr,ysr,xlimit,maxt,ip::inverted_pendulum_borders)
-	hdim = 700
-	vdim = 400
-	size = 1.5
-	verts = [(-size,-size/2),(size,-size/2),(size,size/2),(-size,size/2)]
-	anim = @animate for t in 1:maxt
-		pcarh = plot(xticks = false, yticks = false,xlim = (-xlimit-0.3,xlimit+0.3),ylim = (-0.1, ip.l + 0.05), grid = false, axis = false,legend = false)
-		pcarr = plot(xticks = false, yticks = false,xlim = (-xlimit-0.3,xlimit+0.3),ylim = (-0.1, ip.l + 0.05), grid = false, axis = false,legend = false)
-		#Plot arena
-		plot!(pcarh, [-xlimit-0.2,xlimit+0.2], [-0.1,-0.1], color = :black)
-		plot!(pcarh, [-xlimit-0.3,-xlimit-0.2], [0.2*ip.l,0.2*ip.l], color = :black)
-		plot!(pcarh, [xlimit+0.2,xlimit+0.3], [0.2*ip.l,0.2*ip.l], color = :black)
-		plot!(pcarh, [-xlimit-0.2,-xlimit-0.2], [-0.1,0.2*ip.l], color = :black)
-		plot!(pcarh, [xlimit+0.2,xlimit+0.2], [-0.1,0.2*ip.l], color = :black)
-		#Plot arena
-		plot!(pcarr, [-xlimit-0.2,xlimit+0.2], [-0.1,-0.1], color = :black)
-		plot!(pcarr, [-xlimit-0.3,-xlimit-0.2], [0.2*ip.l,0.2*ip.l], color = :black)
-		plot!(pcarr, [xlimit+0.2,xlimit+0.3], [0.2*ip.l,0.2*ip.l], color = :black)
-		plot!(pcarr, [-xlimit-0.2,-xlimit-0.2], [-0.1,0.2*ip.l], color = :black)
-		plot!(pcarr, [xlimit+0.2,xlimit+0.2], [-0.1,0.2*ip.l], color = :black)
-		if t <= maxt
-			#excess = abs(xposcar[t][1]) - 1
-			plot!(pcarh,xsh[t],ysh[t],marker = (:none, 1),linewidth = 2, linecolor = :black)
-			plot!(pcarr,xsr[t],ysr[t],marker = (:none, 1),linewidth = 2, linecolor = :black)
-			plot!(pcarh,xposcarh[t],[0],marker = (Shape(verts),30))
-			plot!(pcarr,xposcarr[t],[0],marker = (Shape(verts),30))
-		#scatter!(ptest,xs[t],ys[t],markersize = 50)
-		#plot!(ptest,xticks = collect(0.5:env1.sizex+0.5), yticks = collect(0.5:env1.sizey+0.5), gridalpha = 0.8, showaxis = false, ylim=(0.5,env1.sizey +0.5), xlim=(0.5,env1.sizex + 0.5))
-		end
-		plot(pcarh,pcarr, size = (hdim,vdim),margin=5Plots.mm,layout = Plots.grid(2, 1, heigths=[0.5,0.5]), title=["H agent" "R agent, ϵ = $(ϵ)"])
-	end
-	anim
+# ╔═╡ 43ce27d1-3246-4045-b3aa-a99bcf25cbaa
+if movie_both == true
+	maxt = max_t_q_anim #min(length(xposcar_h_anim),length(xposcar_q_anim))
+	println("H agent lived $(length(xposcar_h_anim)), and R agent lived $(length(xposcar_q_anim))")
+	anim_both = animate_both(xposcar_b,xs_b,ys_b,xposcar_q,xs_q,ys_q,ip_border.max_x,maxt,ϵ,ip_border,with_title = false)
 end
 
-# ╔═╡ 09d9941d-1629-45cb-aa37-6ce43a553dd5
-if bothagents_anim == true
-	anim_both = animate_both(xposcar_h_anim,xs_h_anim,ys_h_anim,xposcar_q_anim,xs_q_anim,ys_q_anim,ip_b.max_x,max_t_q_anim,ip_b)
-	gif(anim_both,fps = Int(1/ip_b.Δt))
-end
+# ╔═╡ 0832d5e6-7e92-430f-afe3-ddb5e55dc591
+gif(anim_both,fps = Int(1/ip_border.Δt),"dummy.gif")
 
 # ╔═╡ 096a58e3-f417-446e-83f0-84a333880680
 begin
@@ -986,12 +1073,13 @@ end
 
 # ╔═╡ c95dc4f2-1f54-4266-bf23-7d24cee7b3d4
 begin
-	cbarlim = 0.006
-	p1h = plot(ylim = (-36,36),xlim=(-1.5,1.5),xlabel = "Position \$x\$", ylabel = "Angle \$\\theta\$",title = "H agent")
-	plot!(p1h,x_b,thetas_ep_b.*180/pi,bins = (40,40),st = :histogram2d,normed = :probability,clim = (0,cbarlim),cbar = false)
-	p2h = plot(ylim = (-36,36),xlim=(-1.5,1.5),xlabel = "Position \$x\$", title = "R agent, ϵ = $(ϵ)")
-	plot!(p2h,x_q,thetas_ep_q.*180/pi,bins = (40,40),st = :histogram2d,normed = :probability,clim = (0,cbarlim))
-	plot(p1h,p2h,size = (900,400),layout = Plots.grid(1, 2, widths=[0.44,0.56]),margin = 5Plots.mm,grid = false)
+	cbarlim = 0.003
+	p1h = plot(ylim = (-30,30),xlim=(-2,2),colorbarticks = [0.0,0.001,0.002])#,xlabel = "Position \$x\$", ylabel = "Angle \$\\theta\$",title = "H agent")
+	#heatmap!(p1h,zeros(160,160))
+	plot!(p1h,x_b,thetas_ep_b.*180/pi,bins = (70,70),st = :histogram2d,normed = :probability,clim = (0,cbarlim),cbar = false)
+	p2h = plot(ylim = (-30,30),xlim=(-2,2))#,xlabel = "Position \$x\$", title = "R agent, ϵ = $(ϵ)")
+	plot!(p2h,x_q,thetas_ep_q.*180/pi,bins = (70,70),st = :histogram2d,normed = :probability,clim = (0,cbarlim))
+	plot(p1h,p2h,size = (700,300),layout = Plots.grid(1, 2, widths=[0.44,0.56]),margin = 6Plots.mm,grid = false)
 	#savefig("angle_position_histogram_eps_$(ϵ).pdf")
 end
 
@@ -1030,7 +1118,10 @@ begin
 end
 
 # ╔═╡ 9fa87325-4af3-4ec0-a716-80652dcf2ace
-md"Angle vs Position? $(@bind angle CheckBox(default = false))"
+md"Angle vs Position? $(@bind angle CheckBox(default = true))"
+
+# ╔═╡ 1aace394-c7da-421a-bd4c-e7c7d8b36231
+t_trajectories = 2000
 
 # ╔═╡ c9e4bc33-046f-4ebd-9da7-a768886107ef
 if angle
@@ -1042,28 +1133,48 @@ else
 end
 
 # ╔═╡ f4b1a0bf-aff3-4b49-b15f-e5fdf31d969c
-# begin
-# 	phase_space_trajectory = plot(1,xlabel = "Position",ylabel = labely,xlim = (-1.5,1.5),ylim=(-limy,limy),label = false, title = "R agent",marker = (:black,2))
-# 	@gif for i in 1:200#length(x_b)
-# 		if angle
-# 			push!(phase_space_trajectory,x_q[i],thetas_ep_q[i]*180/pi)
-# 		else
-# 			push!(phase_space_trajectory,x_q[i],vs_ep_q[i])
-# 		end
-# 	end every 10
-# end
+begin
+	phase_space_trajectory = plot(1,xlabel = "Position",ylabel = labely,xlim = (-2.,2.),ylim=(-limy,limy),label = false, title = "R agent, ϵ = $(ϵ)",marker = (:black,2))
+	@gif for i in 1:t_trajectories#length(x_b)
+		if angle
+			push!(phase_space_trajectory,x_q[i],thetas_ep_q[i]*180/pi)
+		else
+			push!(phase_space_trajectory,x_q[i],vs_ep_q[i])
+		end
+	end every 10
+	#savefig("path_R_agent.gif")
+end
 
 # ╔═╡ bde8e418-9391-4c5a-a754-5ae1e3215e66
-# begin
-# 	ps_trajectory = plot(1,xlabel = "Position",ylabel = labely,xlim = (-1.5,1.5),ylim=(-limy,limy),label = false, title = "H agent",marker = (:black,2))
-# 	@gif for i in 1:200#length(x_b)
-# 		if angle
-# 			push!(ps_trajectory,x_b[i],thetas_ep_b[i]*180/pi)
-# 		else
-# 			push!(ps_trajectory,x_b[i],vs_ep_b[i])
-# 		end
-# 	end every 10
-# end
+begin
+	ps_trajectory = plot(1,xlabel = "Position",ylabel = labely,xlim = (-2.,2.),ylim=(-limy,limy),label = false, title = "H agent \$\\beta = 0.0\$",marker = (:black,2))
+	@gif for i in 1:t_trajectories#length(x_b)
+		if angle
+			push!(ps_trajectory,x_b[i],thetas_ep_b[i]*180/pi)
+		else
+			push!(ps_trajectory,x_b[i],vs_ep_b[i])
+		end
+	end every 10
+end
+
+# ╔═╡ ac2816ee-c066-4063-ae74-0a143df37a9c
+begin
+	ps_h = plot(1,xlabel = "Position",ylabel = labely,xlim = (-2.,2.),ylim=(-limy,limy),label = false, title = "H agent",marker = (:black,1.5),lc = "blue",lw = 2)
+	ps_r = plot(1,xlabel = "Position",ylabel = labely,xlim = (-2.,2.),ylim=(-limy,limy),label = false, title = "R agent, ϵ = $(ϵ)",marker = (:black,1.5),lc = "orange",lw = 2)
+	colgrad = cgrad(:roma)
+	@gif for i in 1:2:t_trajectories#length(x_b)
+		if angle
+			push!(ps_h,x_b[i],thetas_ep_b[i]*180/pi)
+			push!(ps_r,x_q[i],thetas_ep_q[i]*180/pi)
+			plot!(ps_h)
+		else
+			push!(ps_r,x_q[i],vs_ep_q[i])
+			push!(ps_h,x_b[i],vs_ep_b[i])
+		end
+		#plot!(ps_h)
+		plot(ps_h,ps_r,size = (800,400),margin = 5Plots.mm)
+	end every 5
+end
 
 # ╔═╡ d0c487cb-041f-4c8d-9054-e5f3cfad1ed4
 # begin
@@ -1091,6 +1202,701 @@ end
 # 	#savefig("histograms_epsilon_$(ϵ).pdf")
 # end
 
+# ╔═╡ e25f575e-91d5-479e-a752-a831a0692f26
+md"# Stochastic half arena"
+
+# ╔═╡ 0e7f28f3-53b2-431d-afd9-d2fe6c511863
+@with_kw struct pars
+	α = 1
+	β = 1
+	#probability of not performing your action (performing "nothing" instead)
+	η = 0.0
+end
+
+# ╔═╡ e0c1c42b-4327-4ad8-b097-92bf08912e3e
+η_test = 0.4
+
+# ╔═╡ 47c63b41-4385-479f-b0e9-afae0ed08058
+params = pars(β = 1.0,η = η_test)
+
+# ╔═╡ d3cbbcca-b43a-421e-b29f-4388a409de41
+function prob_transition(state::State,action,params,env::inverted_pendulum_borders)
+	acc = dwdt(state.θ,state.w,action,env)
+	acc_0 = dwdt(state.θ,state.w,0,env)
+	new_th = state.θ + state.w*env.Δt #+ acc*env.Δt^2/2
+	new_w = state.w + acc*env.Δt
+	new_w_0 = state.w + acc_0*env.Δt
+	#According to the paper, but there is a sign error
+	#acc_x = env.α*(action + env.m*env.l*(state.w^2*sin(state.θ)-acc*cos(state.θ)))
+	acc_x = (4/3 * env.l * acc - env.g*sin(state.θ))/cos(state.θ)
+	acc_x_0 = (4/3 * env.l * acc_0 - env.g*sin(state.θ))/cos(state.θ)
+	new_v = state.v + acc_x*env.Δt
+	new_v_0 = state.v + acc_x_0*env.Δt
+	new_x = state.x + state.v*env.Δt #+ acc_x*env.Δt^2/2
+	new_u = state.u
+	if abs(new_th) >= env.max_θ 
+		new_th = sign(new_th)*env.max_θ
+		new_u = 1
+	end
+	if abs(new_x) >= env.max_x
+		new_x = sign(new_x)*env.max_x
+		new_u = 1
+	end
+	if abs(new_v) >=env.max_v
+		new_v = sign(new_v)*env.max_v
+	end
+	if abs(new_v_0) >=env.max_v
+		new_v_0 = sign(new_v_0)*env.max_v
+	end
+	if abs(new_w_0) >=env.max_w
+		new_w_0 = sign(new_w_0)*env.max_w
+	end
+	if abs(new_w) >= env.max_w
+		new_w = sign(new_w)*env.max_w
+	end
+	#You can fail at using your action only at x>0 part of the arena
+	if state.x > 0
+		prob = params.η
+	else
+		prob = 0
+	end
+	[State(θ = new_th, w = new_w, v = new_v, x = new_x, u = new_u),State(θ = new_th, w = new_w_0, v = new_v_0, x = new_x, u = new_u)],[1-prob,prob]
+end
+
+# ╔═╡ bcff0238-4182-4407-a8b7-f19e6b700906
+function h_iteration_half(params,env::inverted_pendulum_borders; tolerance = 1E0, n_iter = 100,verbose = false)
+	v = zeros(env.nstates)
+	v_new = zeros(env.nstates)
+	t_stop = n_iter
+	error = 0
+	f_error = 0
+	for t in 1:n_iter
+		#println("iter = ",t)
+		v_itp = interpolate_value(v,env)
+		ferror_max = 0
+		#Parallelization over states
+		Threads.@threads for idx_θ in 1:env.sizeθ
+			for idx_w in 1:env.sizew, idx_u in 1:env.sizeu, idx_v in 1:env.sizev, idx_x in 1:env.sizex
+				
+				state_idx = [idx_θ,idx_w,idx_u,idx_v,idx_x]
+				state = State(θ = env.θs[idx_θ], w = env.ws[idx_w], u = idx_u, v = 
+				env.vs[idx_v], x = env.xs[idx_x])
+				#println("state = ", state)
+				i = build_index_b(state_idx,env)
+				actions,ids_actions = adm_actions_b(state,env)
+				sum = 0
+				# Add negligible external reward that breaks degeneracy for 
+				# Q agent
+				#small_reward = degeneracy_cost(state,env,params.δ)
+				for (id_a,a) in enumerate(actions)
+					#For every action, look at reachable states
+					#s_primes_ids,states_p = reachable_states_b(state,a,env)
+					states_p,probs_p = prob_transition(state,a,params,env)
+					#states_p = [real_transition(state,a,env)]
+					exponent = 0
+					for (idx,s_p) in enumerate(states_p)
+						#exponent += env.γ*1*v_itp(s_p.θ,s_p.w,s_p.u,s_p.v,s_p.x)
+						if probs_p[idx] > 0
+							exponent += -params.β*probs_p[idx]*log(probs_p[idx]) + env.γ*probs_p[idx]*v_itp(s_p.θ,s_p.w,s_p.u,s_p.v,s_p.x)
+						end
+					end
+					sum += exp(exponent/params.α)# + small_reward)
+				end
+				v_new[i] = params.α*log(sum)
+				f_error = abs(v[i] - v_new[i])
+				# Use supremum norm of difference between values
+				# at different iterations
+				ferror_max = max(ferror_max,f_error)
+			end
+		end
+		# Check overall error between value's values at different iterations
+		error = norm(v-v_new)/norm(v)
+		#if f_error < tolerance
+		if ferror_max < tolerance
+			t_stop = t
+			break
+		end
+		if verbose == true
+		println("iteration = ", t, ", error = ", error, ", max function error = ", ferror_max)
+		end
+		v = deepcopy(v_new)
+	end
+	v_new,error,t_stop
+end
+
+# ╔═╡ 581515a9-3d39-44ac-be92-e3049a36a15d
+function optimal_policy_half(state,value,params,env::inverted_pendulum_borders)
+	#Check admissible actions
+	actions,ids_actions = adm_actions_b(state,env)
+	policy = zeros(length(actions))
+	#state_index = build_nonflat_index_b(state,env)
+	#id_state = build_index_b(state_index,env)
+	#Value at current state
+	v_state = value(state.θ,state.w,state.u,state.v,state.x)
+	for (idx,a) in enumerate(actions)
+		#Given action, check reachable states (deterministic environment for now)
+		#s_primes_ids,states_p = reachable_states_b(state,a,env)
+		s_primes,probs_p = prob_transition(state,a,params,env)
+		exponent = 0
+		for (idx_p,s_p) in enumerate(s_primes)
+			#P = 1
+			#if interpolation == true
+				#interpolated value
+				if probs_p[idx_p] > 0 
+					exponent += -params.β*probs_p[idx_p]*log(probs_p[idx_p]) + env.γ*probs_p[idx_p]*value(s_p.θ,s_p.w,s_p.u,s_p.v,s_p.x)
+				end
+			# else
+			# 	#deterministic environment
+			# 	i_p = build_index_b(s_primes_ids[1],env)
+			# 	exponent += env.γ*P*value[i_p]
+			# end
+		end
+		#Normalize at exponent
+		exponent -= v_state
+		policy[idx] = exp(exponent/params.α)
+	end
+	#Since we are using interpolated values, policy might not be normalized, so we normalize
+	#println("sum policy = ", sum(policy))
+	policy = policy./sum(policy)
+	#Return available actions and policy distribution over actions
+	actions,policy
+end
+
+# ╔═╡ 5a71d63b-a63e-4ad7-abc4-36c2f2c61711
+function create_episode_half(state_0,int_value,max_t,params,env::inverted_pendulum_borders)
+	x = 0.
+	v = 0.
+	xpositions = Any[]
+	ypositions = Any[]
+	xposcar = Any[]
+	yposcar = Any[]
+	thetas = Any[]
+	ws = Any[]
+	vs = Any[]
+	us = Any[]
+	a_s = Any[]
+	values = Any[]
+	entropies = Any[]
+	all_x = Any[]
+	all_y = Any[]
+	state = deepcopy(state_0)
+	for t in 1:max_t
+		thetax = state.x - env.l*sin(state.θ)
+		thetay = env.l*cos(state.θ)
+		push!(xpositions,[state.x,thetax])
+		push!(ypositions,[0,thetay])
+		push!(xposcar,[state.x])
+		push!(thetas,state.θ)
+		push!(ws,state.w)
+		push!(vs,state.v)
+		push!(us,state.u)
+		if state.u == 1
+			break
+		end
+		#ids_dstate,discretized_state = discretize_state(state,env)
+		#id_dstate = build_index_b(ids_dstate,env)
+		push!(values,int_value(state.θ,state.w,state.u,state.v,state.x))
+		actions,policy = optimal_policy_half(state,int_value,params,env)
+		#Choosing the action with highest prob (empowerement style)
+		#idx = findmax(policy)[2] 
+		#Choosing action randomly according to policy
+		push!(entropies,entropy(policy))
+		idx = rand(Categorical(policy))
+		action = actions[idx]
+		push!(a_s,action)
+		#For discretized dynamics
+		#_,state_p = transition_b(state,action,env) 
+		#For real dynamics
+		states_p,probs_p = prob_transition(state,action,params,env)
+		idx_s_p = rand(Categorical(probs_p))
+		state_p = states_p[idx_s_p]
+		state = deepcopy(state_p)
+	#end
+	end
+	xpositions,ypositions,xposcar,thetas,ws,us,vs,a_s,values,entropies
+end
+
+# ╔═╡ c210a8ba-8b22-42b6-8d87-1d80dfe625bd
+maxt_anim = 200
+
+# ╔═╡ 37e6726b-71a3-46bf-9f36-2c38a478fc3e
+md"## Many values of η"
+
+# ╔═╡ b33ddf78-0254-4d1c-b0e6-9698a02ae089
+ip_eta = inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-40,-10,0,10,40], max_x = 1.8, max_v = 6, nactions = 5, γ = 0.99)
+
+# ╔═╡ 48728be0-acbf-49d5-9ee9-f07fa562f199
+#h_value_half,_,stop_h_half = h_iteration_half(params,ip_b,tolerance = 1E-1,n_iter = 100,verbose = true)
+h_value_half = readdlm("values_half/h_value_beta_$(params.β)_g_$(ip_eta.γ)_eta_$(η_test).dat")
+
+# ╔═╡ c5f05707-18e2-40ec-bce2-0da371914426
+h_value_int_half = interpolate_value(h_value_half,ip_eta);
+
+# ╔═╡ 09bf257f-fa33-4bb7-a2b9-77904cf528fe
+begin
+	time_histograms_half = time_histograms #10000
+	xs_half, ys_half, xposcar_half, thetas_ep_half, ws_ep_half, us_ep_half, vs_ep_half, actions_half, values_half, entropies_half = create_episode_half(state_0_comp,h_value_int_half,time_histograms_half, params,ip_eta)
+	#Check if it survived the whole episode
+	length(xposcar_half)
+	x_half = Any[]
+	for i in 1:length(xposcar_half)
+	 push!(x_half,xposcar_half[i][1])
+	end
+	length(x_half)
+end
+
+# ╔═╡ e4be43f1-28fb-4506-8b91-ea0f4c6d6304
+begin
+	p1half = plot(ylim = (-30,30),xlim=(-2,2))
+	plot!(p1half,x_half,thetas_ep_half.*180/pi,bins = (100,100),st = :histogram2d,normed = :probability,clim = (0,cbarlim),cbar = true)
+	plot(p1half,size = (400,300),margin = 6Plots.mm,grid = false)
+	#savefig("stochastic_arena/histogram_beta_$(params.β).png")
+end
+
+# ╔═╡ 6b3f49a2-a0f5-4005-8034-ce8cb8d00d13
+begin
+	ps_trajectory_half = plot(1,xlabel = "Position",ylabel = labely,xlim = (-2.,2.),ylim=(-limy,limy),label = false, title = "H agent, \$\\beta = $(params.β)\$",marker = (:black,2))
+	@gif for i in 1:t_trajectories#length(x_b)
+		if angle
+			push!(ps_trajectory_half,x_half[i],thetas_ep_half[i]*180/pi)
+		else
+			push!(ps_trajectory_half,x_half[i],vs_ep_half[i])
+		end
+	end every 10
+end
+
+# ╔═╡ 0fa694bf-d13f-4d62-8283-54accad831af
+length([a for a in x_half if a > 0])/time_histograms
+
+# ╔═╡ 15667883-b1fd-422a-ae10-74a22293acb9
+anim_half = animate_w_borders(xposcar_half[1:maxt_anim],xs_half[1:maxt_anim],ys_half[1:maxt_anim],ip_b.max_x,maxt_anim,values_half,entropies_half[1:maxt_anim],ip_b,false, title = "Stochastic arena, \$\\beta = $(params.β), \\eta = $(params.η), \\gamma = $(ip_eta.γ)\$")
+
+# ╔═╡ f2f0b55b-1a8c-47b8-b4dc-8f2f11556e13
+gif(anim_half, fps = Int(1/ip_b.Δt))
+
+# ╔═╡ c67e1e15-712d-4183-a75c-5361ad1ea5e7
+print("values_half/h_value_beta_$(params.β)_g_$(ip_eta.γ)_eta_$(η_test).dat")
+
+# ╔═╡ e1903c79-da4a-4d4a-9140-b5bb5b49133c
+ηs_totry = [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
+
+# ╔═╡ a438af2e-ca31-4427-bc74-e84301d1f9cf
+# begin
+# 	#Calculate q values for several ηs
+# 	ηs_to_compute_value = [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0] #ηs_totry #ϵs_totry #[0.25,0.3,0.35,0.4]
+# 	for (i,η) in enumerate(ηs_to_compute_value)
+# 		par_sa = pars(β = 1,η = η)
+# 		par_a = pars(β = 0, η = η)
+# 		#println("epsilon = ", ϵ)
+# 		h_val_sa, _, _ = h_iteration_half(par_sa,ip_eta,tolerance = 1E-3,n_iter = 1000)
+# 		h_val_a, _, _ = h_iteration_half(par_a,ip_eta,tolerance = 1E-3,n_iter = 1000)
+# 		writedlm("values_half/h_value_sa_g_$(ip_eta.γ)_eta_$(η).dat",h_val_sa)
+# 		writedlm("values_half/h_value_a_g_$(ip_eta.γ)_eta_$(η).dat",h_val_a)
+# 	end
+# end
+
+# ╔═╡ d7e60d83-fa62-451f-99f9-126f8cd0e821
+# begin
+# 	#Calculate q values for several βs
+# 	βs_to_compute_value = collect(1.5:0.5:4.0)
+# 	ηs_to_compute_value = [0.1,0.5,0.9]#[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0] #ηs_totry #ϵs_totry #[0.25,0.3,0.35,0.4]
+# 	for β in βs_to_compute_value
+# 		for η in ηs_to_compute_value
+# 		par_s = pars(β = β,η = η)
+# 		#println("epsilon = ", ϵ)
+# 		h_val, _, _ = h_iteration_half(par_s,ip_eta,tolerance = 1E-2,n_iter = 1000)
+# 		writedlm("values_half/h_value_beta_$(β)_g_$(ip_eta.γ)_eta_$(η).dat",h_val)
+# 		end
+# 	end
+# end
+
+# ╔═╡ 5942cdba-6f0d-4128-8ce3-57826fafad0a
+begin
+	max_time_half = 10000
+	num_episodes_half = 1000
+	ηs = [0.1,0.5,0.9] #ηs_totry# [0.0,0.001,0.01,0.05] 
+	βs = [-1.0,-0.6,0.0,0.6,1.0,1.5,2.0,2.5,3.0,3.5,4.0] #collect(1.5:0.5:4.0)
+	survival_pcts_β = zeros(length(ηs),length(βs),num_episodes_half)
+	time_stochastic_β = zeros(length(ηs),length(βs),num_episodes_half)
+	# survival_pcts_sa = zeros(length(ηs),length(βs),num_episodes_half)
+	# survival_pcts_a = zeros(length(ηs),num_episodes_half)
+	# time_stochastic_sa = zeros(length(ηs),num_episodes_half)
+	# time_stochastic_a = zeros(length(ηs),num_episodes_half)
+	# for (i,η) in enumerate(ηs)
+	# 	for (j,β) in enumerate(βs)
+	# 		par = pars(β = β,η = η)
+	# 		#par_a = pars(β = 0, η = η)
+	# 		h_val = readdlm("values_half/h_value_beta_$(β)_g_$(ip_eta.γ)_eta_$(η).dat")
+	# 		#h_val_a = readdlm("values_half/h_value_a_g_$(ip_eta.γ)_eta_$(η).dat")
+	# 		h_val_int = interpolate_value(h_val,ip_eta)
+	# 		#h_val_int_a = interpolate_value(h_val_a,ip_b)
+	# 		Threads.@threads for k in 1:num_episodes_half
+	# 			#println("j = ", j)
+	# 			state0 = State(θ = rand(interval),x = -ip_eta.max_x/2, v = rand(interval),w = rand(interval), u = 2)
+	# 			_,_, xposcar_half, _,_,_,_,_,_,_ = create_episode_half(state0,h_val_int,max_time_half, par,ip_eta)
+	# 			# _,_, xposcar_half_a, _,_,_,_,_,_,_ = create_episode_half(state0,h_val_int_a,max_time_half, par_a,ip_eta)
+	# 			x_half = Any[]
+	# 			#x_half_a = Any[]
+	# 			for k in 1:length(xposcar_half)
+	# 			 push!(x_half,xposcar_half[k][1])
+	# 			end
+	# 			# for k in 1:length(xposcar_half_a)
+	# 			#  push!(x_half_a,xposcar_half_a[k][1])
+	# 			# end
+				
+	# 			time_stochastic_β[i,j,k] = length([a for a in x_half if a > 0])/length(xposcar_half)
+	# 			#time_stochastic_a[i,j] = length([a for a in x_half_a if a > 0])/length(xposcar_half_a)
+	# 			#survival_timesq[j] = length(xposcar_q)
+	# 			#if length(xposcar_q) == max_time
+	# 			survival_pcts_β[i,j,k] = length(xposcar_half)
+	# 			#survival_pcts_a[i,j] = length(xposcar_half_a)
+	# 			#end
+	# 		end
+	# 	end
+	# end
+	# writedlm("stochastic_arena/time_stochastic_betas_$(βs)_g_$(ip_eta.γ)_eta_$(ηs)_time_$(max_time_half).dat",time_stochastic_β)
+	# #writedlm("stochastic_arena/time_stochastic_a_g_$(ip_eta.γ)_eta_$(ηs)_time_$(max_time_half).dat",time_stochastic_a)
+	# writedlm("stochastic_arena/survival_pcts_betas_$(βs)_g_$(ip_eta.γ)_eta_$(ηs)_time_$(max_time_half).dat",survival_pcts_β)
+	# #writedlm("stochastic_arena/survival_pcts_a_g_$(ip_eta.γ)_eta_$(ηs)_time_$(max_time_half).dat",survival_pcts_a)
+
+	#Otherwise read from file
+	time_stochastic_β = readdlm("stochastic_arena/time_stochastic_betas_$(βs)_g_$(ip_eta.γ)_eta_$(ηs)_time_$(max_time_half).dat")
+	survival_pcts_β = readdlm("stochastic_arena/survival_pcts_betas_$(βs)_g_$(ip_eta.γ)_eta_$(ηs)_time_$(max_time_half).dat")
+	time_stochastic_β = reshape(time_stochastic_β,length(ηs),length(βs),num_episodes_half)
+	survival_pcts_β = reshape(survival_pcts_β,length(ηs),length(βs),num_episodes_half)
+end;
+
+# ╔═╡ 81f415cd-aea3-4c84-aede-c0040f5ac28c
+begin
+	ηss = collect(0.0:0.1:1.0)
+	time_stochastic_sa = readdlm("stochastic_arena/time_stochastic_sa_g_$(ip_eta.γ)_eta_$(ηss)_time_$(max_time_half).dat")
+	time_stochastic_a = readdlm("stochastic_arena/time_stochastic_a_g_$(ip_eta.γ)_eta_$(ηss)_time_$(max_time_half).dat")
+	survival_pcts_sa = readdlm("stochastic_arena/survival_pcts_sa_g_$(ip_eta.γ)_eta_$(ηss)_time_$(max_time_half).dat")
+	survival_pcts_a = readdlm("stochastic_arena/survival_pcts_a_g_$(ip_eta.γ)_eta_$(ηss)_time_$(max_time_half).dat")
+	
+end;
+
+# ╔═╡ 6ebaa094-22b0-4e09-aa7f-eb3492dbf4f6
+begin
+	surv_means_half_β = plot(xticks = collect(0.0:1.0:4.0),xlabel = "β",ylabel = "Survived time steps",yticks = [5000,10000])
+	colors = ["#C0C0C0","#696969","#000000"]
+	for (i,η) in enumerate(ηs)
+		plot!(surv_means_half_β,βs[3:end],mean(survival_pcts_β[i,3:end,:],dims =2),label = "\$\\eta\$ = $(η)",linewidth = 2.5,yerror = std(survival_pcts_β[i,3:end,:],dims = 2)./sqrt(length(survival_pcts_β[i,1,:])),markerstrokewidth = 1,markersize = 3,color = colors[i])
+		plot!(surv_means_half_β, βs[3:end], mean(survival_pcts_β[i,3:end,:],dims =2),label = false,color = colors[i],markershape = :circle,markersize = 2.5,st = :scatter)
+	end
+	plot(surv_means_half_β, grid = false, legend_position = :bottomright,margin = 2Plots.mm,size = (450,300),bg_legend = :transparent,fg_legend = :transparent,fgguide = :black)
+	#savefig("stochastic_arena/h_betas_$(βs)_survival_time_$(max_time_half).pdf")
+end
+
+# ╔═╡ b28859d1-7c4d-438d-a490-c6407365cd6a
+begin
+	surv_means_half = plot(xticks = collect(0.0:0.2:1),xlabel = "η",ylabel = "Survived time steps",yticks = [5000,10000])
+		plot!(surv_means_half, ηss, mean(survival_pcts_a,dims =2).*ones(length(ηss)),label = "\$\\beta = 0\$",linewidth = 2.5,yerror = std(survival_pcts_a,dims = 2)./sqrt(length(survival_pcts_a[1,:])),color = colors[1])
+	plot!(surv_means_half, ηss, mean(survival_pcts_a,dims =2).*ones(length(ηss)),label = false,st = :scatter,markersize = 2.5,color = colors[1])
+	plot!(surv_means_half, ηss, mean(survival_pcts_sa,dims =2).*ones(length(ηss)),label = "\$\\beta = 1\$",linewidth = 2.5,yerror = std(survival_pcts_sa,dims = 2)./sqrt(length(survival_pcts_sa[1,:])),color = colors[2])
+	plot!(surv_means_half, ηss, mean(survival_pcts_sa,dims =2).*ones(length(ηss)),label = false,st = :scatter,markersize = 2,5,color = colors[2])
+
+	
+
+	plot(surv_means_half, grid = false, legend_position = :bottomleft,margin = 2Plots.mm,size = (450,300),bg_legend = :white,fg_legend = :white,fgguide = :black)
+	#savefig("stochastic_arena/h_sa_vs_a_survival_time_$(max_time_half).pdf")
+end
+
+# ╔═╡ d7d217ce-2a0b-4e18-8aa8-8b5e3af08363
+begin
+	times_means_half_β = plot(ylim=(0,1),xticks = collect(0.0:1.0:4.0),yticks = [0.0,0.25,0.5,0.75,1.0])#,xlabel = "β",ylabel = "Time fraction right")
+	for (i,η) in enumerate(ηs)
+		plot!(times_means_half_β,βs[3:end],mean(time_stochastic_β[i,3:end,:],dims =2),label = "\$\\eta\$ = $(η)",linewidth = 2.5,yerror = std(time_stochastic_β[i,3:end,:],dims = 2)./sqrt(length(time_stochastic_β[i,3,:])),markerstrokewidth = 1,markersize = 3,color = colors[i])
+		plot!(times_means_half_β, βs[3:end], mean(time_stochastic_β[i,3:end,:],dims =2),label = false,linewidth = 2,color = colors[i],markershape = :circle,markersize = 2.5,st = :scatter)
+		#plot!(times_means_half_β, βs, mean(time_stochastic_β[i,:,:],dims =2),label = "η = $(η)",linewidth = 2.5,yerror = std(time_stochastic_β[i,:,:],dims = 2)./sqrt(length(time_stochastic_β[i,1,:])))
+	end
+
+
+	plot(times_means_half_β, grid = false, legend_position = :topright,margin = 2Plots.mm,size = (450,300),bg_legend = :transparent,fg_legend = :transparent,fgguide = :black)
+	#savefig("stochastic_arena/h_betas_$(βs)_timeonpositive.pdf")
+end
+
+# ╔═╡ b96306e1-2c38-4245-8d0a-87d503ab9df8
+begin
+	times_means_half = plot(ylim=(0,1),yticks = [0.0,0.25,0.5,0.75,1.0],xticks = collect(0.0:0.2:1))#xlabel = "η",ylabel = "Fraction of time on \$x > 0\$")
+	plot!(times_means_half, ηss, mean(time_stochastic_a,dims =2).*ones(length(ηss)),label = "\$\\beta = 0\$",linewidth = 2.5,yerror = std(time_stochastic_a,dims = 2)./sqrt(length(time_stochastic_a[1,:])),color = "#C0C0C0",markercolor = "#C0C0C0")
+	plot!(times_means_half, ηss, mean(time_stochastic_a,dims =2).*ones(length(ηss)),label = false,markershape = :circle,markersize = 2.5,color = "#C0C0C0",st = :scatter)
+	plot!(times_means_half, ηss, mean(time_stochastic_sa,dims =2).*ones(length(ηss)),label = "\$\\beta = 1\$",linewidth = 2.5,yerror = std(time_stochastic_sa,dims = 2)./sqrt(length(time_stochastic_sa[1,:])),color = "#696969")
+	plot!(times_means_half, ηss, mean(time_stochastic_sa,dims =2).*ones(length(ηss)),label = false,linewidth = 2.5,color = "#696969",markershape = :circle,markersize = 2.5,st = :scatter)
+
+	plot(times_means_half, grid = false, legend_position = :topright,margin = 2Plots.mm,size = (450,300),bg_legend = :transparent,fg_legend = :transparent,fgguide = :black)
+	#savefig("stochastic_arena/h_sa_vs_a_timeonpositive.pdf")
+end
+
+# ╔═╡ 930f7d64-29ef-4e7b-826d-66243e9724e9
+md"# Death analysis (not part of paper)"
+
+# ╔═╡ 03fc1bf9-bcf5-44e9-9542-da9325639907
+border_sizes = [2.8,2.4,2.0,1.6,1.2,0.8,0.4,0.2] #[2.4,2.0,1.6,1.2,0.8]
+
+# ╔═╡ bcc12d64-1eb8-4edb-b042-57e70ce3b641
+begin
+	#For R agent
+	γs_R = [0.82,0.84,0.86,0.88,0.9,0.92]
+	#For H agent 
+	γs_H = [0.9,0.91,0.92,0.94,0.96,0.97]
+	#γs = [0.9,0.91,0.92,0.93,0.94,0.95,0.96,0.97]
+end
+
+# ╔═╡ d9df62ae-47e7-4bde-907e-9eff4251c17f
+ϵ_border = 0.4
+
+# ╔═╡ 20061a57-ac97-409d-8a88-7decef927609
+# begin
+# 	b_par = 2.4
+# 	#γ = 0.92
+# 	#Tolerance for convergence of value iteration
+# 	tol_borders = 1E-3
+# 	#Array of parameters
+# 	parameter = [0.84,0.82] #γs #border_sizes
+# 	#Calculate q values for several borders
+# 	for (i,p) in enumerate(parameter)
+# 		γ = p
+# 		ip_border = inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-50,-10,0,10,50], max_x = b_par, max_v = 3, nactions = 5, γ = γ)
+# 		ϵ = ϵ_border
+# 		#h_val,_,_= iteration(ip_border,tol_borders,1200,δ = δ_r)
+# 		q_val, _, _ = Q_iteration(ip_border,ϵ,tol_borders,1200,δ = δ_r)
+# 		#writedlm("values_gamma/h_value_g_$(ip_border.γ)_nstates_$(ip_border.nstates)_xlim_$(b_par).dat",h_val)
+# 		writedlm("values_gamma/q_value_g_$(ip_border.γ)_eps_$(ϵ)_nstates_$(ip_border.nstates)_xlim_$(b_par).dat",q_val)
+# 	end
+# end
+
+# ╔═╡ 4ba1e06b-f1b9-4faa-99e8-abd133a9052b
+begin
+	max_time_gammas = 1000
+	num_episodes_gammas = 10000
+	n_blocks_gammas = 50
+	#To compute the survival times for various environments, it takes a long time
+	survival_R_gammas = zeros(length(γs_R),num_episodes_gammas)
+	survival_H_gammas = zeros(length(γs_R),num_episodes_gammas)
+	#Per agent entropy
+	# entropies_R_borders = zeros(length(border_sizes),num_episodes_borders)
+	# entropies_H_borders = zeros(length(border_sizes),num_episodes_borders)
+	#Many agent entropy
+	entropies_R_gammas = zeros(length(γs_R),n_blocks_gammas)
+	entropies_H_gammas = zeros(length(γs_R),n_blocks_gammas)
+	b_gamma = 2.4
+	# for (i,γ) in enumerate(γs_R)
+	# 	ip_r = inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-50,-10,0,10,50], max_x = b_gamma, max_v = 3, nactions = 5, γ = γ)
+	# 	ip_h = inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-50,-10,0,10,50], max_x = b_gamma, max_v = 3, nactions = 5, γ = γs_H[i])
+	# 	bins = (ip_r.θs,ip_r.ws,ip_r.vs,ip_r.xs)
+	# 	q_val = readdlm("values_gamma/q_value_g_$(ip_r.γ)_eps_$(ϵ_border)_nstates_$(ip_r.nstates)_xlim_$(b_gamma).dat")
+	# 	h_val = readdlm("values_gamma/h_value_g_$(ip_h.γ)_nstates_$(ip_h.nstates)_xlim_$(b_gamma).dat")
+	# 	q_val_int = interpolate_value(q_val,ip_r)
+	# 	h_val_int = interpolate_value(h_val,ip_h)
+	# 	thetas_h = Any[]
+	# 	thetas_r = Any[]
+	# 	ws_h = Any[]
+	# 	ws_r = Any[]
+	# 	vs_h = Any[]
+	# 	vs_r = Any[]
+	# 	xs_h = Any[]
+	# 	xs_r = Any[]
+	# 	block = 1
+	# 	for j in 1:num_episodes_gammas
+	# 		#println("j = ", j)
+	# 		state0 = State(θ = rand(interval),x = rand(interval), v = rand(interval),w = rand(interval), u = 2)
+	# 		xs_q, ys_q, xposcar_q, thetas_ep_q, ws_ep_q, us_ep_q, vs_ep_q, actions_q = create_episode_q(state0, q_val_int, ϵ_border, max_time_gammas, ip_r)
+	# 		xs_b, ys_b, xposcar_b, thetas_ep_b, ws_ep_b, us_ep_b, vs_ep_b, actions_b = create_episode_b(state0,h_val_int,max_time_gammas, ip_h)
+	# 		#For many agent entropy
+	# 		survival_R_gammas[i,j] = length(xposcar_q)
+	# 		survival_H_gammas[i,j] = length(xposcar_b)
+	# 		push!(thetas_h,thetas_ep_b...)
+	# 		push!(thetas_r,thetas_ep_q...)
+	# 		push!(ws_h,ws_ep_b...)
+	# 		push!(ws_r,ws_ep_q...)
+	# 		push!(vs_h,vs_ep_b...)
+	# 		push!(vs_r,vs_ep_q...)
+	# 		push!(xs_h,[xposcar_b[i][1] for i in 1:(length(xposcar_b))]...)
+	# 		push!(xs_r,[xposcar_q[i][1] for i in 1:(length(xposcar_q))]...)
+	# 		if j >= block*num_episodes_gammas/n_blocks_gammas
+	# 			h_r = fit(Histogram, (thetas_r,ws_r, vs_r,xs_r), bins)
+	# 			h_h = fit(Histogram, (thetas_h,ws_h, vs_h,xs_h), bins)
+	# 			h_r_n = normalize(h_r,mode =:probability)
+	# 			h_h_n = normalize(h_h,mode =:probability)
+	# 			entropies_R_gammas[i,block] = entropy(h_r_n.weights)
+	# 			entropies_H_gammas[i,block] = entropy(h_h_n.weights)
+	# 			thetas_h = Any[]
+	# 			thetas_r = Any[]
+	# 			ws_h = Any[]
+	# 			ws_r = Any[]
+	# 			vs_h = Any[]
+	# 			vs_r = Any[]
+	# 			xs_h = Any[]
+	# 			xs_r = Any[]
+	# 			block += 1 
+	# 		end
+	# 		# For per agent entropy
+	# 		# bins = (ip_border.θs,ip_border.ws,ip_border.vs,ip_border.xs)
+	# 		# h_r = fit(Histogram, (thetas_ep_q,ws_ep_q, vs_ep_q,[xposcar_q[i][1] for i in 1:(length(xposcar_q))]), bins)
+	# 		# h_h = fit(Histogram, (thetas_ep_b,ws_ep_b, vs_ep_b,[xposcar_b[i][1] for i in 1:(length(xposcar_b))]), bins)
+	# 		# h_r_n = normalize(h_r,mode =:probability)
+	# 		# h_h_n = normalize(h_h,mode =:probability)
+	# 		# entropies_R_borders[i,j] = entropy(h_r_n.weights)
+	# 		# entropies_H_borders[i,j] = entropy(h_h_n.weights)
+	# 		#end
+	# 		end
+	# 	#h_r = fit(Histogram, (thetas_r,ws_r, vs_r,xs_r), bins)
+	# 	#h_h = fit(Histogram, (thetas_h,ws_h, vs_h,xs_h), bins)
+	# 	#h_r_n = normalize(h_r,mode =:probability)
+	# 	#h_h_n = normalize(h_h,mode =:probability)
+	# 	#entropies_R_borders[i] = entropy(h_r_n.weights)
+	# 	#entropies_H_borders[i] = entropy(h_h_n.weights)
+	# end
+	
+	#Read from file
+	survival_R_gammas = readdlm("survivals/survival_gammas_R_epsilon_$(ϵ_border)_maxtime_$(max_time_gammas).dat")
+	survival_H_gammas = readdlm("survivals/survival_gammas_H_maxtime_$(max_time_gammas).dat")
+	entropies_H_gammas = readdlm("survivals/entropy_gammas_H_maxtime_$(max_time_gammas).dat")
+	entropies_R_gammas = readdlm("survivals/entropy_gammas_R_epsilon_$(ϵ_border)_maxtime_$(max_time_gammas).dat")
+end
+
+# ╔═╡ 92356131-5c26-4257-a148-2b9f49f2c9c6
+begin
+	plot(legend_position = :right,xlabel = "Mean lifetime",ylabel = "Many agent state entropy")
+	plot!(mean(survival_R_gammas,dims = 2),xerror = std(survival_R_gammas,dims = 2)/sqrt(length(survival_R_gammas[1,:])),mean(entropies_R_gammas,dims = 2),yerror = std(entropies_R_gammas,dims = 2)/sqrt(length(entropies_R_gammas[1,:])),label = "R agent")
+	
+	plot!(mean(survival_H_gammas,dims = 2),xerror = std(survival_H_gammas,dims = 2)/sqrt(length(survival_H_gammas[1,:])),mean(entropies_H_gammas,dims = 2),yerror = std(entropies_H_gammas,dims = 2)/sqrt(length(entropies_H_gammas[1,:])),label = "H agent")
+	#savefig("many_agent_entropy_gamma2.pdf")
+end
+
+# ╔═╡ cae8d738-94f5-47ec-a7cf-4da51c069c75
+# begin
+# 	writedlm("survivals/survival_gammas_R_epsilon_$(ϵ_border)_maxtime_$(max_time_gammas).dat",survival_R_gammas)
+# 	writedlm("survivals/survival_gammas_H_maxtime_$(max_time_gammas).dat",survival_H_gammas)
+# 	writedlm("survivals/entropy_gammas_R_epsilon_$(ϵ_border)_maxtime_$(max_time_gammas).dat",entropies_R_gammas)
+# 	writedlm("survivals/entropy_gammas_H_maxtime_$(max_time_gammas).dat",entropies_H_gammas)
+# end
+
+# ╔═╡ ac58190d-05bd-4e3e-9797-9bc1ee32b545
+#writedlm("survivals/survival_borders_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat",survival_R_borders)
+# writedlm("survivals/survival_borders_H_maxtime_$(max_time_borders).dat",survival_H_borders)
+#writedlm("survivals/entropy_borders_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat",entropies_R_borders)
+# writedlm("survivals/entropy_borders_H_maxtime_$(max_time_borders).dat",entropies_H_borders)
+
+# ╔═╡ 15928993-d9fc-4934-a36a-90fb54a322ba
+begin
+	max_time_borders = 1000
+	num_episodes_borders = 50000
+	n_blocks = 50
+	# #To compute the survival times for various environments, it takes a long time
+	# survival_R_borders = zeros(length(border_sizes),num_episodes_borders)
+	# survival_H_borders = zeros(length(border_sizes),num_episodes_borders)
+	# #Per agent entropy
+	# # entropies_R_borders = zeros(length(border_sizes),num_episodes_borders)
+	# # entropies_H_borders = zeros(length(border_sizes),num_episodes_borders)
+	# #Many agent entropy
+	# entropies_R_borders = zeros(length(border_sizes),n_blocks)
+	# entropies_H_borders = zeros(length(border_sizes),n_blocks)
+	# for (i,b) in enumerate(border_sizes)
+	# 	ip_border = inverted_pendulum_borders(M = 1, m = 0.1,l = 1.,Δt = 0.02, sizeθ = 31, sizew = 31,sizev = 31, sizex = 31, max_θ = 0.62, max_w = 3, a_s = [-50,-10,0,10,50], max_x = b, max_v = 3, nactions = 5, γ = 0.92)
+	# 	bins = (ip_border.θs,ip_border.ws,ip_border.vs,ip_border.xs)
+	# 	q_val = readdlm("values_borders/q_value_g_$(ip_border.γ)_eps_$(ϵ_border)_nstates_$(ip_border.nstates)_xlim_$(b).dat")
+	# 	h_val = readdlm("values_borders/h_value_g_$(ip_border.γ)_nstates_$(ip_border.nstates)_xlim_$(b).dat")
+	# 	q_val_int = interpolate_value(q_val,ip_border)
+	# 	h_val_int = interpolate_value(h_val,ip_border)
+	# 	thetas_h = Any[]
+	# 	thetas_r = Any[]
+	# 	ws_h = Any[]
+	# 	ws_r = Any[]
+	# 	vs_h = Any[]
+	# 	vs_r = Any[]
+	# 	xs_h = Any[]
+	# 	xs_r = Any[]
+	# 	block = 1
+	# 	for j in 1:num_episodes_borders
+	# 		#println("j = ", j)
+	# 		state0 = State(θ = rand(interval),x = rand(interval), v = rand(interval),w = rand(interval), u = 2)
+	# 		xs_q, ys_q, xposcar_q, thetas_ep_q, ws_ep_q, us_ep_q, vs_ep_q, actions_q = create_episode_q(state0, q_val_int, ϵ_border, max_time_borders, ip_border)
+	# 		xs_b, ys_b, xposcar_b, thetas_ep_b, ws_ep_b, us_ep_b, vs_ep_b, actions_b = create_episode_b(state0,h_val_int,max_time_borders, ip_border)
+	# 		#For many agent entropy
+	# 		survival_R_borders[i,j] = length(xposcar_q)
+	# 		survival_H_borders[i,j] = length(xposcar_b)
+	# 		push!(thetas_h,thetas_ep_b...)
+	# 		push!(thetas_r,thetas_ep_q...)
+	# 		push!(ws_h,ws_ep_b...)
+	# 		push!(ws_r,ws_ep_q...)
+	# 		push!(vs_h,vs_ep_b...)
+	# 		push!(vs_r,vs_ep_q...)
+	# 		push!(xs_h,[xposcar_b[i][1] for i in 1:(length(xposcar_b))]...)
+	# 		push!(xs_r,[xposcar_q[i][1] for i in 1:(length(xposcar_q))]...)
+	# 		if j >= block*num_episodes_borders/n_blocks
+	# 			h_r = fit(Histogram, (thetas_r,ws_r, vs_r,xs_r), bins)
+	# 			h_h = fit(Histogram, (thetas_h,ws_h, vs_h,xs_h), bins)
+	# 			h_r_n = normalize(h_r,mode =:probability)
+	# 			h_h_n = normalize(h_h,mode =:probability)
+	# 			entropies_R_borders[i,block] = entropy(h_r_n.weights)
+	# 			entropies_H_borders[i,block] = entropy(h_h_n.weights)
+	# 			thetas_h = Any[]
+	# 			thetas_r = Any[]
+	# 			ws_h = Any[]
+	# 			ws_r = Any[]
+	# 			vs_h = Any[]
+	# 			vs_r = Any[]
+	# 			xs_h = Any[]
+	# 			xs_r = Any[]
+	# 			block += 1 
+	# 		end
+	# 		# For per agent entropy
+	# 		# bins = (ip_border.θs,ip_border.ws,ip_border.vs,ip_border.xs)
+	# 		# h_r = fit(Histogram, (thetas_ep_q,ws_ep_q, vs_ep_q,[xposcar_q[i][1] for i in 1:(length(xposcar_q))]), bins)
+	# 		# h_h = fit(Histogram, (thetas_ep_b,ws_ep_b, vs_ep_b,[xposcar_b[i][1] for i in 1:(length(xposcar_b))]), bins)
+	# 		# h_r_n = normalize(h_r,mode =:probability)
+	# 		# h_h_n = normalize(h_h,mode =:probability)
+	# 		# entropies_R_borders[i,j] = entropy(h_r_n.weights)
+	# 		# entropies_H_borders[i,j] = entropy(h_h_n.weights)
+	# 		#end
+	# 		end
+	# 	#h_r = fit(Histogram, (thetas_r,ws_r, vs_r,xs_r), bins)
+	# 	#h_h = fit(Histogram, (thetas_h,ws_h, vs_h,xs_h), bins)
+	# 	#h_r_n = normalize(h_r,mode =:probability)
+	# 	#h_h_n = normalize(h_h,mode =:probability)
+	# 	#entropies_R_borders[i] = entropy(h_r_n.weights)
+	# 	#entropies_H_borders[i] = entropy(h_h_n.weights)
+	# end
+	#writedlm("survivals/survival_borders_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat",survival_R_borders)
+	# writedlm("survivals/survival_borders_H_maxtime_$(max_time_borders).dat",survival_H_borders)
+	#writedlm("survivals/entropy_borders_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat",entropies_R_borders)
+	# writedlm("survivals/entropy_borders_H_maxtime_$(max_time_borders).dat",entropies_H_borders)
+	
+	#Read from file
+	survival_R_borders = readdlm("survivals/survival_borders_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat")
+	survival_H_borders = readdlm("survivals/survival_borders_H_maxtime_$(max_time_borders).dat")
+	entropies_H_borders = readdlm("survivals/entropy_borders_H_maxtime_$(max_time_borders).dat")
+	entropies_R_borders = readdlm("survivals/entropy_borders_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat")
+end
+
+# ╔═╡ a07bb87e-8321-4aa8-9555-ae33a51c5fa7
+# begin
+# 	writedlm("survivals/survival_borders_g_0.92_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat",survival_R_borders)
+# 	writedlm("survivals/survival_borders_g_0.92_H_maxtime_$(max_time_borders).dat",survival_H_borders)
+# 	writedlm("survivals/entropy_borders_g_0.92_R_epsilon_$(ϵ_border)_maxtime_$(max_time_borders).dat",entropies_R_borders)
+# 	writedlm("survivals/entropy_borders_g_0.92_H_maxtime_$(max_time_borders).dat",entropies_H_borders)
+# end
+
+# ╔═╡ cbb6c21f-81fe-4859-be21-2ff3759321fb
+begin
+	plot(legend_position = :right,xlabel = "Mean lifetime",ylabel = "Many agent state entropy")
+	plot!(mean(survival_R_borders,dims = 2),xerror = std(survival_R_borders,dims = 2)/sqrt(length(survival_R_borders[1,:])),mean(entropies_R_borders,dims = 2),yerror = std(entropies_R_borders,dims = 2)/sqrt(length(entropies_R_borders[1,:])),label = "R agent")
+	
+	plot!(mean(survival_H_borders,dims = 2),xerror = std(survival_H_borders,dims = 2)/sqrt(length(survival_H_borders[1,:])),mean(entropies_H_borders,dims = 2),yerror = std(entropies_H_borders,dims = 2)/sqrt(length(entropies_H_borders[1,:])),label = "H agent")
+	#savefig("many_agent_entropy_borders.pdf")
+end
+
+# ╔═╡ cb24610c-2eac-4054-a17c-0ef4f3668f6c
+mean(survival_R_borders,dims = 2),mean(entropies_R_borders,dims = 2)
+
+# ╔═╡ 5721178c-e93e-4f2e-b39b-58ebdf9edfb8
+entropies_R_borders
+
+# ╔═╡ 5800b6d5-8593-4f1d-95f6-9e3353f63eb2
+entropies_H_borders
+
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
@@ -1101,31 +1907,34 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
 ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
 
 [compat]
-Distributions = "~0.25.58"
-Interpolations = "~0.13.6"
+Distributions = "~0.25.75"
+Interpolations = "~0.14.6"
 Parameters = "~0.12.3"
-Plots = "~1.29.0"
-PlutoUI = "~0.7.38"
-StatsPlots = "~0.14.34"
-ZipFile = "~0.9.4"
+Plots = "~1.35.3"
+PlutoUI = "~0.7.43"
+StatsBase = "~0.33.21"
+StatsPlots = "~0.15.4"
+ZipFile = "~0.10.0"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.7.1"
+julia_version = "1.8.0"
 manifest_format = "2.0"
+project_hash = "bb215c73e0143aeb6f63b8e09ffa2edd888d0a34"
 
 [[deps.AbstractFFTs]]
 deps = ["ChainRulesCore", "LinearAlgebra"]
-git-tree-sha1 = "6f1d9bc1c08f9f4a8fa92e3ea3cb50153a1b40d4"
+git-tree-sha1 = "69f7020bd72f069c219b5e8c236c1fa90d2cb409"
 uuid = "621f4979-c628-5d54-868e-fcf4e3e8185c"
-version = "1.1.0"
+version = "1.2.1"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
@@ -1135,12 +1944,13 @@ version = "1.1.4"
 
 [[deps.Adapt]]
 deps = ["LinearAlgebra"]
-git-tree-sha1 = "af92965fb30777147966f58acb05da51c5616b5f"
+git-tree-sha1 = "195c5505521008abea5aee4f96930717958eac6f"
 uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
-version = "3.3.3"
+version = "3.4.0"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
+version = "1.1.1"
 
 [[deps.Arpack]]
 deps = ["Arpack_jll", "Libdl", "LinearAlgebra", "Logging"]
@@ -1166,6 +1976,11 @@ version = "1.0.1"
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
+[[deps.BitFlags]]
+git-tree-sha1 = "84259bb6172806304b9101094a7cc4bc6f56dbc6"
+uuid = "d1d4a3ce-64b1-5f1a-9ba4-7e7e69966f35"
+version = "0.1.5"
+
 [[deps.Bzip2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "19a35467a82e236ff51bc17a3a44b69ef35185a2"
@@ -1186,39 +2001,45 @@ version = "0.5.1"
 
 [[deps.ChainRulesCore]]
 deps = ["Compat", "LinearAlgebra", "SparseArrays"]
-git-tree-sha1 = "9950387274246d08af38f6eef8cb5480862a435f"
+git-tree-sha1 = "e7ff6cadf743c098e08fca25c91103ee4303c9bb"
 uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-version = "1.14.0"
+version = "1.15.6"
 
 [[deps.ChangesOfVariables]]
 deps = ["ChainRulesCore", "LinearAlgebra", "Test"]
-git-tree-sha1 = "1e315e3f4b0b7ce40feded39c73049692126cf53"
+git-tree-sha1 = "38f7a08f19d8810338d4f5085211c7dfa5d5bdd8"
 uuid = "9e997f8a-9a97-42d5-a9f1-ce6bfc15e2c0"
-version = "0.1.3"
+version = "0.1.4"
 
 [[deps.Clustering]]
-deps = ["Distances", "LinearAlgebra", "NearestNeighbors", "Printf", "SparseArrays", "Statistics", "StatsBase"]
-git-tree-sha1 = "75479b7df4167267d75294d14b58244695beb2ac"
+deps = ["Distances", "LinearAlgebra", "NearestNeighbors", "Printf", "Random", "SparseArrays", "Statistics", "StatsBase"]
+git-tree-sha1 = "64df3da1d2a26f4de23871cd1b6482bb68092bd5"
 uuid = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
-version = "0.14.2"
+version = "0.14.3"
+
+[[deps.CodecZlib]]
+deps = ["TranscodingStreams", "Zlib_jll"]
+git-tree-sha1 = "ded953804d019afa9a3f98981d99b33e3db7b6da"
+uuid = "944b1d66-785c-5afd-91f1-9de20f533193"
+version = "0.7.0"
 
 [[deps.ColorSchemes]]
 deps = ["ColorTypes", "ColorVectorSpace", "Colors", "FixedPointNumbers", "Random"]
-git-tree-sha1 = "7297381ccb5df764549818d9a7d57e45f1057d30"
+git-tree-sha1 = "1fd869cc3875b57347f7027521f561cf46d1fcd8"
 uuid = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
-version = "3.18.0"
+version = "3.19.0"
 
 [[deps.ColorTypes]]
 deps = ["FixedPointNumbers", "Random"]
-git-tree-sha1 = "63d1e802de0c4882c00aee5cb16f9dd4d6d7c59c"
+git-tree-sha1 = "eb7f0f8307f71fac7c606984ea5fb2817275d6e4"
 uuid = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
-version = "0.11.1"
+version = "0.11.4"
 
 [[deps.ColorVectorSpace]]
 deps = ["ColorTypes", "FixedPointNumbers", "LinearAlgebra", "SpecialFunctions", "Statistics", "TensorCore"]
-git-tree-sha1 = "3f1f500312161f1ae067abe07d13b40f78f32e07"
+git-tree-sha1 = "d08c20eef1f2cbc6e60fd3612ac4340b89fea322"
 uuid = "c3611d14-8923-5661-9e6a-0046d554d3a4"
-version = "0.9.8"
+version = "0.9.9"
 
 [[deps.Colors]]
 deps = ["ColorTypes", "FixedPointNumbers", "Reexport"]
@@ -1227,31 +2048,31 @@ uuid = "5ae59095-9a9b-59fe-a467-6f913c188581"
 version = "0.12.8"
 
 [[deps.Compat]]
-deps = ["Base64", "Dates", "DelimitedFiles", "Distributed", "InteractiveUtils", "LibGit2", "Libdl", "LinearAlgebra", "Markdown", "Mmap", "Pkg", "Printf", "REPL", "Random", "SHA", "Serialization", "SharedArrays", "Sockets", "SparseArrays", "Statistics", "Test", "UUIDs", "Unicode"]
-git-tree-sha1 = "b153278a25dd42c65abbf4e62344f9d22e59191b"
+deps = ["Dates", "LinearAlgebra", "UUIDs"]
+git-tree-sha1 = "3ca828fe1b75fa84b021a7860bd039eaea84d2f2"
 uuid = "34da2185-b29b-5c13-b0c7-acf172513d20"
-version = "3.43.0"
+version = "4.3.0"
 
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
+version = "0.5.2+0"
 
 [[deps.Contour]]
-deps = ["StaticArrays"]
-git-tree-sha1 = "9f02045d934dc030edad45944ea80dbd1f0ebea7"
+git-tree-sha1 = "d05d9e7b7aedff4e5b51a029dced05cfb6125781"
 uuid = "d38c429a-6771-53c6-b99e-75d170b6e991"
-version = "0.5.7"
+version = "0.6.2"
 
 [[deps.DataAPI]]
-git-tree-sha1 = "fb5f5316dd3fd4c5e7c30a24d50643b73e37cd40"
+git-tree-sha1 = "46d2680e618f8abd007bce0c3026cb0c4a8f2032"
 uuid = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
-version = "1.10.0"
+version = "1.12.0"
 
 [[deps.DataStructures]]
 deps = ["Compat", "InteractiveUtils", "OrderedCollections"]
-git-tree-sha1 = "cc1a8e22627f33c789ab60b36a9132ac050bbf75"
+git-tree-sha1 = "d1fff3a548102f48987a52a2e0d114fa97d730f0"
 uuid = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
-version = "0.18.12"
+version = "0.18.13"
 
 [[deps.DataValueInterfaces]]
 git-tree-sha1 = "bfc1187b79289637fa0ef6d4436ebdfe6905cbd6"
@@ -1290,31 +2111,26 @@ uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.Distributions]]
 deps = ["ChainRulesCore", "DensityInterface", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "StatsBase", "StatsFuns", "Test"]
-git-tree-sha1 = "8a6b49396a4058771c5c072239b2e0a76e2e898c"
+git-tree-sha1 = "0d7d213133d948c56e8c2d9f4eab0293491d8e4a"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.58"
+version = "0.25.75"
 
 [[deps.DocStringExtensions]]
 deps = ["LibGit2"]
-git-tree-sha1 = "b19534d1895d702889b219c382a6e18010797f0b"
+git-tree-sha1 = "5158c2b41018c5f7eb1470d558127ac274eca0c9"
 uuid = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
-version = "0.8.6"
+version = "0.9.1"
 
 [[deps.Downloads]]
-deps = ["ArgTools", "LibCURL", "NetworkOptions"]
+deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
+version = "1.6.0"
 
 [[deps.DualNumbers]]
 deps = ["Calculus", "NaNMath", "SpecialFunctions"]
 git-tree-sha1 = "5837a837389fccf076445fce071c8ddaea35a566"
 uuid = "fa6b7ba4-c1ee-5f82-b5fc-ecf0adba8f74"
 version = "0.6.8"
-
-[[deps.EarCut_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "3f3a2501fa7236e9b911e0f7a588c657e822bb6d"
-uuid = "5ae413db-bbd1-5e63-b57d-d24a61df00f5"
-version = "2.2.3+0"
 
 [[deps.Expat_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1329,16 +2145,16 @@ uuid = "c87230d0-a227-11e9-1b43-d7ebe4e7570a"
 version = "0.4.1"
 
 [[deps.FFMPEG_jll]]
-deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "Pkg", "Zlib_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "d8a578692e3077ac998b50c0217dfd67f21d1e5f"
+deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "PCRE2_jll", "Pkg", "Zlib_jll", "libaom_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
+git-tree-sha1 = "74faea50c1d007c85837327f6775bea60b5492dd"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "4.4.0+0"
+version = "4.4.2+2"
 
 [[deps.FFTW]]
 deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
-git-tree-sha1 = "505876577b5481e50d089c1c68899dfb6faebc62"
+git-tree-sha1 = "90630efff0894f8142308e334473eba54c433549"
 uuid = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
-version = "1.4.6"
+version = "1.5.0"
 
 [[deps.FFTW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1346,11 +2162,14 @@ git-tree-sha1 = "c6033cc3892d0ef5bb9cd29b7f2f0331ea5184ea"
 uuid = "f5851436-0d7a-5f13-b9de-f02708fd171a"
 version = "3.3.10+0"
 
+[[deps.FileWatching]]
+uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+
 [[deps.FillArrays]]
 deps = ["LinearAlgebra", "Random", "SparseArrays", "Statistics"]
-git-tree-sha1 = "246621d23d1f43e3b9c368bf3b72b2331a27c286"
+git-tree-sha1 = "87519eb762f85534445f5cda35be12e32759ee14"
 uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
-version = "0.13.2"
+version = "0.13.4"
 
 [[deps.FixedPointNumbers]]
 deps = ["Statistics"]
@@ -1384,27 +2203,21 @@ version = "1.0.10+0"
 
 [[deps.GLFW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pkg", "Xorg_libXcursor_jll", "Xorg_libXi_jll", "Xorg_libXinerama_jll", "Xorg_libXrandr_jll"]
-git-tree-sha1 = "51d2dfe8e590fbd74e7a842cf6d13d8a2f45dc01"
+git-tree-sha1 = "d972031d28c8c8d9d7b41a536ad7bb0c2579caca"
 uuid = "0656b61e-2033-5cc2-a64a-77c0f6c09b89"
-version = "3.3.6+0"
+version = "3.3.8+0"
 
 [[deps.GR]]
-deps = ["Base64", "DelimitedFiles", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Pkg", "Printf", "Random", "RelocatableFolders", "Serialization", "Sockets", "Test", "UUIDs"]
-git-tree-sha1 = "af237c08bda486b74318c8070adb96efa6952530"
+deps = ["Base64", "DelimitedFiles", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Pkg", "Preferences", "Printf", "Random", "Serialization", "Sockets", "Test", "UUIDs"]
+git-tree-sha1 = "cf7bf90e483228f6c988e474b420064e5351b892"
 uuid = "28b8d3ca-fb5f-59d9-8090-bfdbd6d07a71"
-version = "0.64.2"
+version = "0.69.4"
 
 [[deps.GR_jll]]
 deps = ["Artifacts", "Bzip2_jll", "Cairo_jll", "FFMPEG_jll", "Fontconfig_jll", "GLFW_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll", "Pixman_jll", "Pkg", "Qt5Base_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "cd6efcf9dc746b06709df14e462f0a3fe0786b1e"
+git-tree-sha1 = "bc9f7725571ddb4ab2c4bc74fa397c1c5ad08943"
 uuid = "d2c73de3-f751-5644-a686-071e5b155ba9"
-version = "0.64.2+0"
-
-[[deps.GeometryBasics]]
-deps = ["EarCut_jll", "IterTools", "LinearAlgebra", "StaticArrays", "StructArrays", "Tables"]
-git-tree-sha1 = "83ea630384a13fc4f002b77690bc0afeb4255ac9"
-uuid = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
-version = "0.4.2"
+version = "0.69.1+0"
 
 [[deps.Gettext_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "XML2_jll"]
@@ -1413,10 +2226,10 @@ uuid = "78b55507-aeef-58d4-861c-77aaff3498b1"
 version = "0.21.0+0"
 
 [[deps.Glib_jll]]
-deps = ["Artifacts", "Gettext_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Libiconv_jll", "Libmount_jll", "PCRE_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "a32d672ac2c967f3deb8a81d828afc739c838a06"
+deps = ["Artifacts", "Gettext_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Libiconv_jll", "Libmount_jll", "PCRE2_jll", "Pkg", "Zlib_jll"]
+git-tree-sha1 = "fb83fbe02fe57f2c068013aa94bcdf6760d3a7a7"
 uuid = "7746bdde-850d-59dc-9ae8-88ece973131d"
-version = "2.68.3+2"
+version = "2.74.0+1"
 
 [[deps.Graphite2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1430,10 +2243,10 @@ uuid = "42e2da0e-8278-4e71-bc24-59509adca0fe"
 version = "1.0.2"
 
 [[deps.HTTP]]
-deps = ["Base64", "Dates", "IniFile", "Logging", "MbedTLS", "NetworkOptions", "Sockets", "URIs"]
-git-tree-sha1 = "0fa77022fe4b511826b39c894c90daf5fce3334a"
+deps = ["Base64", "CodecZlib", "Dates", "IniFile", "Logging", "LoggingExtras", "MbedTLS", "NetworkOptions", "OpenSSL", "Random", "SimpleBufferStream", "Sockets", "URIs", "UUIDs"]
+git-tree-sha1 = "4abede886fcba15cd5fd041fef776b230d004cee"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "0.9.17"
+version = "1.4.0"
 
 [[deps.HarfBuzz_jll]]
 deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "Graphite2_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg"]
@@ -1442,10 +2255,10 @@ uuid = "2e76f6c2-a576-52d4-95c1-20adfe4de566"
 version = "2.8.1+1"
 
 [[deps.HypergeometricFunctions]]
-deps = ["DualNumbers", "LinearAlgebra", "SpecialFunctions", "Test"]
-git-tree-sha1 = "65e4589030ef3c44d3b90bdc5aac462b4bb05567"
+deps = ["DualNumbers", "LinearAlgebra", "OpenLibm_jll", "SpecialFunctions", "Test"]
+git-tree-sha1 = "709d864e3ed6e3545230601f94e11ebc65994641"
 uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
-version = "0.3.8"
+version = "0.3.11"
 
 [[deps.Hyperscript]]
 deps = ["Test"]
@@ -1481,31 +2294,32 @@ deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 
 [[deps.Interpolations]]
-deps = ["AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "Requires", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
-git-tree-sha1 = "b7bc05649af456efc75d178846f47006c2c4c3c7"
+deps = ["Adapt", "AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "Requires", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
+git-tree-sha1 = "842dd89a6cb75e02e85fdd75c760cdc43f5d6863"
 uuid = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
-version = "0.13.6"
+version = "0.14.6"
 
 [[deps.InverseFunctions]]
 deps = ["Test"]
-git-tree-sha1 = "336cc738f03e069ef2cac55a104eb823455dca75"
+git-tree-sha1 = "49510dfcb407e572524ba94aeae2fced1f3feb0f"
 uuid = "3587e190-3f89-42d0-90ee-14403ec27112"
-version = "0.1.4"
+version = "0.1.8"
 
 [[deps.IrrationalConstants]]
 git-tree-sha1 = "7fd44fd4ff43fc60815f8e764c0f352b83c49151"
 uuid = "92d709cd-6900-40b7-9082-c6be49f344b6"
 version = "0.1.1"
 
-[[deps.IterTools]]
-git-tree-sha1 = "fa6287a4469f5e048d763df38279ee729fbd44e5"
-uuid = "c8e1da08-722c-5040-9ed9-7db0dc04731e"
-version = "1.4.0"
-
 [[deps.IteratorInterfaceExtensions]]
 git-tree-sha1 = "a3f24677c21f5bbe9d2a714f95dcd58337fb2856"
 uuid = "82899510-4779-5014-852e-03e436cf321d"
 version = "1.0.0"
+
+[[deps.JLFzf]]
+deps = ["Pipe", "REPL", "Random", "fzf_jll"]
+git-tree-sha1 = "f377670cda23b6b7c1c0b3893e37451c5c1a2185"
+uuid = "1019f520-868f-41f5-a6de-eb00f4b6a39c"
+version = "0.1.5"
 
 [[deps.JLLWrappers]]
 deps = ["Preferences"]
@@ -1527,9 +2341,9 @@ version = "2.1.2+0"
 
 [[deps.KernelDensity]]
 deps = ["Distributions", "DocStringExtensions", "FFTW", "Interpolations", "StatsBase"]
-git-tree-sha1 = "591e8dc09ad18386189610acafb970032c519707"
+git-tree-sha1 = "9816b296736292a80b9a3200eb7fbb57aaa3917a"
 uuid = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
-version = "0.6.3"
+version = "0.6.5"
 
 [[deps.LAME_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1555,10 +2369,10 @@ uuid = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 version = "1.3.0"
 
 [[deps.Latexify]]
-deps = ["Formatting", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdown", "Printf", "Requires"]
-git-tree-sha1 = "46a39b9c58749eefb5f2dc1178cb8fab5332b1ab"
+deps = ["Formatting", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdown", "OrderedCollections", "Printf", "Requires"]
+git-tree-sha1 = "ab9aa169d2160129beb241cb2750ca499b4e90e9"
 uuid = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
-version = "0.15.15"
+version = "0.15.17"
 
 [[deps.LazyArtifacts]]
 deps = ["Artifacts", "Pkg"]
@@ -1567,10 +2381,12 @@ uuid = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
 [[deps.LibCURL]]
 deps = ["LibCURL_jll", "MozillaCACerts_jll"]
 uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
+version = "0.6.3"
 
 [[deps.LibCURL_jll]]
 deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
+version = "7.84.0+0"
 
 [[deps.LibGit2]]
 deps = ["Base64", "NetworkOptions", "Printf", "SHA"]
@@ -1579,6 +2395,7 @@ uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
 [[deps.LibSSH2_jll]]
 deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
+version = "1.10.2+0"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -1621,9 +2438,9 @@ version = "2.35.0+0"
 
 [[deps.Libtiff_jll]]
 deps = ["Artifacts", "JLLWrappers", "JpegTurbo_jll", "LERC_jll", "Libdl", "Pkg", "Zlib_jll", "Zstd_jll"]
-git-tree-sha1 = "c9551dd26e31ab17b86cbd00c2ede019c08758eb"
+git-tree-sha1 = "3eb79b0ca5764d4799c06699573fd8f533259713"
 uuid = "89763e89-9b03-5906-acba-b20f662cd828"
-version = "4.3.0+1"
+version = "4.4.0+0"
 
 [[deps.Libuuid_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1637,38 +2454,45 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [[deps.LogExpFunctions]]
 deps = ["ChainRulesCore", "ChangesOfVariables", "DocStringExtensions", "InverseFunctions", "IrrationalConstants", "LinearAlgebra"]
-git-tree-sha1 = "09e4b894ce6a976c354a69041a04748180d43637"
+git-tree-sha1 = "94d9c52ca447e23eac0c0f074effbcd38830deb5"
 uuid = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
-version = "0.3.15"
+version = "0.3.18"
 
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
+[[deps.LoggingExtras]]
+deps = ["Dates", "Logging"]
+git-tree-sha1 = "5d4d2d9904227b8bd66386c1138cf4d5ffa826bf"
+uuid = "e6f89c97-d47a-5376-807f-9c37f3926c36"
+version = "0.4.9"
+
 [[deps.MKL_jll]]
 deps = ["Artifacts", "IntelOpenMP_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "Pkg"]
-git-tree-sha1 = "e595b205efd49508358f7dc670a940c790204629"
+git-tree-sha1 = "41d162ae9c868218b1f3fe78cba878aa348c2d26"
 uuid = "856f044c-d86e-5d09-b602-aeab76dc8ba7"
-version = "2022.0.0+0"
+version = "2022.1.0+0"
 
 [[deps.MacroTools]]
 deps = ["Markdown", "Random"]
-git-tree-sha1 = "3d3e902b31198a27340d0bf00d6ac452866021cf"
+git-tree-sha1 = "42324d08725e200c23d4dfb549e0d5d89dede2d2"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
-version = "0.5.9"
+version = "0.5.10"
 
 [[deps.Markdown]]
 deps = ["Base64"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 
 [[deps.MbedTLS]]
-deps = ["Dates", "MbedTLS_jll", "Random", "Sockets"]
-git-tree-sha1 = "1c38e51c3d08ef2278062ebceade0e46cefc96fe"
+deps = ["Dates", "MbedTLS_jll", "MozillaCACerts_jll", "Random", "Sockets"]
+git-tree-sha1 = "6872f9594ff273da6d13c7c1a1545d5a8c7d0c1c"
 uuid = "739be429-bea8-5141-9913-cc70e7f3736d"
-version = "1.0.3"
+version = "1.1.6"
 
 [[deps.MbedTLS_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
+version = "2.28.0+0"
 
 [[deps.Measures]]
 git-tree-sha1 = "e498ddeee6f9fdb4551ce855a46f54dbd900245f"
@@ -1686,37 +2510,40 @@ uuid = "a63ad114-7e13-5084-954f-fe012c677804"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
+version = "2022.2.1"
 
 [[deps.MultivariateStats]]
-deps = ["Arpack", "LinearAlgebra", "SparseArrays", "Statistics", "StatsBase"]
-git-tree-sha1 = "6d019f5a0465522bbfdd68ecfad7f86b535d6935"
+deps = ["Arpack", "LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI", "StatsBase"]
+git-tree-sha1 = "efe9c8ecab7a6311d4b91568bd6c88897822fabe"
 uuid = "6f286f6a-111f-5878-ab1e-185364afe411"
-version = "0.9.0"
+version = "0.10.0"
 
 [[deps.NaNMath]]
-git-tree-sha1 = "737a5957f387b17e74d4ad2f440eb330b39a62c5"
+deps = ["OpenLibm_jll"]
+git-tree-sha1 = "a7c3d1da1189a1c2fe843a3bfa04d18d20eb3211"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
-version = "1.0.0"
+version = "1.0.1"
 
 [[deps.NearestNeighbors]]
 deps = ["Distances", "StaticArrays"]
-git-tree-sha1 = "ded92de95031d4a8c61dfb6ba9adb6f1d8016ddd"
+git-tree-sha1 = "440165bf08bc500b8fe4a7be2dc83271a00c0716"
 uuid = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
-version = "0.4.10"
+version = "0.4.12"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
+version = "1.2.0"
 
 [[deps.Observables]]
-git-tree-sha1 = "dfd8d34871bc3ad08cd16026c1828e271d554db9"
+git-tree-sha1 = "5a9ea4b9430d511980c01e9f7173739595bbd335"
 uuid = "510215fc-4207-5dde-b226-833fc4488ee2"
-version = "0.5.1"
+version = "0.5.2"
 
 [[deps.OffsetArrays]]
 deps = ["Adapt"]
-git-tree-sha1 = "aee446d0b3d5764e35289762f6a18e8ea041a592"
+git-tree-sha1 = "1ea784113a6aa054c5ebd95945fa5e52c2f378e7"
 uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
-version = "1.11.0"
+version = "1.12.7"
 
 [[deps.Ogg_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1727,16 +2554,24 @@ version = "1.3.5+1"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
+version = "0.3.20+0"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
+version = "0.8.1+0"
+
+[[deps.OpenSSL]]
+deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
+git-tree-sha1 = "ebe81469e9d7b471d7ddb611d9e147ea16de0add"
+uuid = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
+version = "1.2.1"
 
 [[deps.OpenSSL_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "ab05aa4cc89736e95915b01e7279e61b1bfe33b8"
+git-tree-sha1 = "e60321e3f2616584ff98f0a4f18d98ae6f89bbb3"
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
-version = "1.1.14+0"
+version = "1.1.17+0"
 
 [[deps.OpenSpecFun_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pkg"]
@@ -1755,17 +2590,16 @@ git-tree-sha1 = "85f8e6578bf1f9ee0d11e7bb1b1456435479d47c"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 version = "1.4.1"
 
-[[deps.PCRE_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "b2a7af664e098055a7529ad1a900ded962bca488"
-uuid = "2f80f16e-611a-54ab-bc61-aa92de5b98fc"
-version = "8.44.0+0"
+[[deps.PCRE2_jll]]
+deps = ["Artifacts", "Libdl"]
+uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
+version = "10.40.0+0"
 
 [[deps.PDMats]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
-git-tree-sha1 = "027185efff6be268abbaf30cfd53ca9b59e3c857"
+git-tree-sha1 = "cf494dca75a69712a72b80bc48f59dcf3dea63ec"
 uuid = "90014a1f-27ba-587c-ab20-58faa44d9150"
-version = "0.11.10"
+version = "0.11.16"
 
 [[deps.Parameters]]
 deps = ["OrderedCollections", "UnPack"]
@@ -1775,9 +2609,14 @@ version = "0.12.3"
 
 [[deps.Parsers]]
 deps = ["Dates"]
-git-tree-sha1 = "1285416549ccfcdf0c50d4997a94331e88d68413"
+git-tree-sha1 = "595c0b811cf2bab8b0849a70d9bd6379cc1cfb52"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
-version = "2.3.1"
+version = "2.4.1"
+
+[[deps.Pipe]]
+git-tree-sha1 = "6842804e7867b115ca9de748a0cf6b364523c16d"
+uuid = "b98c9c47-44ae-5843-9183-064241ee97a0"
+version = "1.3.0"
 
 [[deps.Pixman_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1788,6 +2627,7 @@ version = "0.40.1+0"
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "REPL", "Random", "SHA", "Serialization", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+version = "1.8.0"
 
 [[deps.PlotThemes]]
 deps = ["PlotUtils", "Statistics"]
@@ -1796,22 +2636,22 @@ uuid = "ccf2f8ad-2431-5c83-bf29-c5338b663b6a"
 version = "3.0.0"
 
 [[deps.PlotUtils]]
-deps = ["ColorSchemes", "Colors", "Dates", "Printf", "Random", "Reexport", "Statistics"]
-git-tree-sha1 = "bb16469fd5224100e422f0b027d26c5a25de1200"
+deps = ["ColorSchemes", "Colors", "Dates", "Printf", "Random", "Reexport", "SnoopPrecompile", "Statistics"]
+git-tree-sha1 = "21303256d239f6b484977314674aef4bb1fe4420"
 uuid = "995b91a9-d308-5afd-9ec6-746e21dbc043"
-version = "1.2.0"
+version = "1.3.1"
 
 [[deps.Plots]]
-deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "GeometryBasics", "JSON", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "UUIDs", "UnicodeFun", "Unzip"]
-git-tree-sha1 = "d457f881ea56bbfa18222642de51e0abf67b9027"
+deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SnoopPrecompile", "SparseArrays", "Statistics", "StatsBase", "UUIDs", "UnicodeFun", "Unzip"]
+git-tree-sha1 = "524d9ff1b2f4473fef59678c06f9f77160a204b1"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.29.0"
+version = "1.35.3"
 
 [[deps.PlutoUI]]
 deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "Markdown", "Random", "Reexport", "UUIDs"]
-git-tree-sha1 = "670e559e5c8e191ded66fa9ea89c97f10376bb4c"
+git-tree-sha1 = "2777a5c2c91b3145f5aa75b61bb4c2eb38797136"
 uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-version = "0.7.38"
+version = "0.7.43"
 
 [[deps.Preferences]]
 deps = ["TOML"]
@@ -1825,15 +2665,15 @@ uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
 [[deps.Qt5Base_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Fontconfig_jll", "Glib_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "OpenSSL_jll", "Pkg", "Xorg_libXext_jll", "Xorg_libxcb_jll", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_keysyms_jll", "Xorg_xcb_util_renderutil_jll", "Xorg_xcb_util_wm_jll", "Zlib_jll", "xkbcommon_jll"]
-git-tree-sha1 = "c6c0f690d0cc7caddb74cef7aa847b824a16b256"
+git-tree-sha1 = "0c03844e2231e12fda4d0086fd7cbe4098ee8dc5"
 uuid = "ea2cea3b-5b76-57ae-a6ef-0a8af62496e1"
-version = "5.15.3+1"
+version = "5.15.3+2"
 
 [[deps.QuadGK]]
 deps = ["DataStructures", "LinearAlgebra"]
-git-tree-sha1 = "78aadffb3efd2155af139781b8a8df1ef279ea39"
+git-tree-sha1 = "3c009334f45dfd546a16a57960a821a1a023d241"
 uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
-version = "2.4.2"
+version = "2.5.0"
 
 [[deps.REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
@@ -1850,15 +2690,16 @@ uuid = "c84ed2f1-dad5-54f0-aa8e-dbefe2724439"
 version = "0.4.3"
 
 [[deps.RecipesBase]]
-git-tree-sha1 = "6bf3f380ff52ce0832ddd3a2a7b9538ed1bcca7d"
+deps = ["SnoopPrecompile"]
+git-tree-sha1 = "612a4d76ad98e9722c8ba387614539155a59e30c"
 uuid = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
-version = "1.2.1"
+version = "1.3.0"
 
 [[deps.RecipesPipeline]]
-deps = ["Dates", "NaNMath", "PlotUtils", "RecipesBase"]
-git-tree-sha1 = "dc1e451e15d90347a7decc4221842a022b011714"
+deps = ["Dates", "NaNMath", "PlotUtils", "RecipesBase", "SnoopPrecompile"]
+git-tree-sha1 = "9b1c0c8e9188950e66fc28f40bfe0f8aac311fe0"
 uuid = "01d81517-befc-4cb6-b9ec-a95719d0359c"
-version = "0.5.2"
+version = "0.6.7"
 
 [[deps.Reexport]]
 git-tree-sha1 = "45e428421666073eab6f2da5c9d310d99bb12f9b"
@@ -1867,9 +2708,9 @@ version = "1.2.2"
 
 [[deps.RelocatableFolders]]
 deps = ["SHA", "Scratch"]
-git-tree-sha1 = "cdbd3b1338c72ce29d9584fdbe9e9b70eeb5adca"
+git-tree-sha1 = "90bc7a7c96410424509e4263e277e43250c05691"
 uuid = "05181044-ff0b-4ac5-8273-598c1e38db00"
-version = "0.1.3"
+version = "1.0.0"
 
 [[deps.Requires]]
 deps = ["UUIDs"]
@@ -1891,18 +2732,19 @@ version = "0.3.0+0"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+version = "0.7.0"
 
 [[deps.Scratch]]
 deps = ["Dates"]
-git-tree-sha1 = "0b4b7f1393cff97c33891da2a0bf69c6ed241fda"
+git-tree-sha1 = "f94f779c94e58bf9ea243e77a37e16d9de9126bd"
 uuid = "6c6a2e73-6563-6170-7368-637461726353"
-version = "1.1.0"
+version = "1.1.1"
 
 [[deps.SentinelArrays]]
 deps = ["Dates", "Random"]
-git-tree-sha1 = "6a2f7d70512d205ca8c7ee31bfa9f142fe74310c"
+git-tree-sha1 = "efd23b378ea5f2db53a55ae53d3133de4e080aa9"
 uuid = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
-version = "1.3.12"
+version = "1.3.16"
 
 [[deps.Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
@@ -1916,6 +2758,16 @@ deps = ["Dates", "Grisu"]
 git-tree-sha1 = "91eddf657aca81df9ae6ceb20b959ae5653ad1de"
 uuid = "992d4aef-0814-514b-bc4d-f2e9a6c4116f"
 version = "1.0.3"
+
+[[deps.SimpleBufferStream]]
+git-tree-sha1 = "874e8867b33a00e784c8a7e4b60afe9e037b74e1"
+uuid = "777ac1f9-54b0-4bf8-805c-2214025038e7"
+version = "1.1.0"
+
+[[deps.SnoopPrecompile]]
+git-tree-sha1 = "f604441450a3c0569830946e5b33b78c928e1a85"
+uuid = "66db9d55-30c0-4569-8b51-7e840670fc0c"
+version = "1.0.1"
 
 [[deps.Sockets]]
 uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
@@ -1932,15 +2784,20 @@ uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [[deps.SpecialFunctions]]
 deps = ["ChainRulesCore", "IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
-git-tree-sha1 = "5ba658aeecaaf96923dce0da9e703bd1fe7666f9"
+git-tree-sha1 = "d75bda01f8c31ebb72df80a46c88b25d1c79c56d"
 uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
-version = "2.1.4"
+version = "2.1.7"
 
 [[deps.StaticArrays]]
-deps = ["LinearAlgebra", "Random", "Statistics"]
-git-tree-sha1 = "cd56bf18ed715e8b09f06ef8c6b781e6cdc49911"
+deps = ["LinearAlgebra", "Random", "StaticArraysCore", "Statistics"]
+git-tree-sha1 = "f86b3a049e5d05227b10e15dbb315c5b90f14988"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.4.4"
+version = "1.5.9"
+
+[[deps.StaticArraysCore]]
+git-tree-sha1 = "6b7ba252635a5eff6a0b0664a41ee140a1c9e72a"
+uuid = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
+version = "1.4.0"
 
 [[deps.Statistics]]
 deps = ["LinearAlgebra", "SparseArrays"]
@@ -1948,33 +2805,27 @@ uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [[deps.StatsAPI]]
 deps = ["LinearAlgebra"]
-git-tree-sha1 = "c82aaa13b44ea00134f8c9c89819477bd3986ecd"
+git-tree-sha1 = "f9af7f195fb13589dd2e2d57fdb401717d2eb1f6"
 uuid = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
-version = "1.3.0"
+version = "1.5.0"
 
 [[deps.StatsBase]]
 deps = ["DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "8977b17906b0a1cc74ab2e3a05faa16cf08a8291"
+git-tree-sha1 = "d1bf48bfcc554a3761a133fe3a9bb01488e06916"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.33.16"
+version = "0.33.21"
 
 [[deps.StatsFuns]]
 deps = ["ChainRulesCore", "HypergeometricFunctions", "InverseFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
-git-tree-sha1 = "ca9f8a0c9f2e41431dc5b7697058a3f8f8b89498"
+git-tree-sha1 = "5783b877201a82fc0014cbf381e7e6eb130473a4"
 uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
-version = "1.0.0"
+version = "1.0.1"
 
 [[deps.StatsPlots]]
-deps = ["AbstractFFTs", "Clustering", "DataStructures", "DataValues", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
-git-tree-sha1 = "43a316e07ae612c461fd874740aeef396c60f5f8"
+deps = ["AbstractFFTs", "Clustering", "DataStructures", "DataValues", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "NaNMath", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
+git-tree-sha1 = "e0d5bc26226ab1b7648278169858adcfbd861780"
 uuid = "f3b207a7-027a-5e70-b257-86293d7955fd"
-version = "0.14.34"
-
-[[deps.StructArrays]]
-deps = ["Adapt", "DataAPI", "StaticArrays", "Tables"]
-git-tree-sha1 = "e75d82493681dfd884a357952bbd7ab0608e1dc3"
-uuid = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
-version = "0.6.7"
+version = "0.15.4"
 
 [[deps.SuiteSparse]]
 deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
@@ -1983,6 +2834,7 @@ uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 [[deps.TOML]]
 deps = ["Dates"]
 uuid = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+version = "1.0.0"
 
 [[deps.TableOperations]]
 deps = ["SentinelArrays", "Tables", "Test"]
@@ -1998,13 +2850,14 @@ version = "1.0.1"
 
 [[deps.Tables]]
 deps = ["DataAPI", "DataValueInterfaces", "IteratorInterfaceExtensions", "LinearAlgebra", "OrderedCollections", "TableTraits", "Test"]
-git-tree-sha1 = "5ce79ce186cc678bbb5c5681ca3379d1ddae11a1"
+git-tree-sha1 = "2d7164f7b8a066bcfa6224e67736ce0eb54aef5b"
 uuid = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
-version = "1.7.0"
+version = "1.9.0"
 
 [[deps.Tar]]
 deps = ["ArgTools", "SHA"]
 uuid = "a4e569a6-e804-4fa4-b0f3-eef7a1d5b13e"
+version = "1.10.0"
 
 [[deps.TensorCore]]
 deps = ["LinearAlgebra"]
@@ -2016,15 +2869,21 @@ version = "0.1.1"
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
+[[deps.TranscodingStreams]]
+deps = ["Random", "Test"]
+git-tree-sha1 = "8a75929dcd3c38611db2f8d08546decb514fcadf"
+uuid = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
+version = "0.9.9"
+
 [[deps.Tricks]]
 git-tree-sha1 = "6bac775f2d42a611cdfcd1fb217ee719630c4175"
 uuid = "410a4b4d-49e4-4fbc-ab6d-cb71b17b3775"
 version = "0.1.6"
 
 [[deps.URIs]]
-git-tree-sha1 = "97bbe755a53fe859669cd907f2d96aee8d2c1355"
+git-tree-sha1 = "e59ecc5a41b000fa94423a578d29290c7266fc10"
 uuid = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
-version = "1.3.0"
+version = "1.4.0"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]
@@ -2045,9 +2904,9 @@ uuid = "1cfade01-22cf-5700-b092-accc4b62d6e1"
 version = "0.4.1"
 
 [[deps.Unzip]]
-git-tree-sha1 = "34db80951901073501137bdbc3d5a8e7bbd06670"
+git-tree-sha1 = "ca0969166a028236229f63514992fc073799bb78"
 uuid = "41fe7b60-77ed-43a1-b4f0-825fd5a5650d"
-version = "0.1.2"
+version = "0.2.0"
 
 [[deps.Wayland_jll]]
 deps = ["Artifacts", "Expat_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg", "XML2_jll"]
@@ -2075,9 +2934,9 @@ version = "0.5.5"
 
 [[deps.XML2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "1acf5bdf07aa0907e0a37d3718bb88d4b687b74a"
+git-tree-sha1 = "58443b63fb7e465a8a7210828c91c08b92132dff"
 uuid = "02c8fc9c-b97f-50b9-bbe4-9be30ff0a78a"
-version = "2.9.12+0"
+version = "2.9.14+0"
 
 [[deps.XSLT_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libgcrypt_jll", "Libgpg_error_jll", "Libiconv_jll", "Pkg", "XML2_jll", "Zlib_jll"]
@@ -2213,19 +3072,32 @@ version = "1.4.0+3"
 
 [[deps.ZipFile]]
 deps = ["Libdl", "Printf", "Zlib_jll"]
-git-tree-sha1 = "3593e69e469d2111389a9bd06bac1f3d730ac6de"
+git-tree-sha1 = "ef4f23ffde3ee95114b461dc667ea4e6906874b2"
 uuid = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
-version = "0.9.4"
+version = "0.10.0"
 
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
+version = "1.2.12+3"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "e45044cd873ded54b6a5bac0eb5c971392cf1927"
 uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
 version = "1.5.2+0"
+
+[[deps.fzf_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "868e669ccb12ba16eaf50cb2957ee2ff61261c56"
+uuid = "214eeab7-80f7-51ab-84ad-2988db7cef09"
+version = "0.29.0+0"
+
+[[deps.libaom_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "3a2ea60308f0996d26f1e5354e10c24e9ef905d4"
+uuid = "a4ae2306-e953-59d6-aa16-d00cac43593b"
+version = "3.4.0+0"
 
 [[deps.libass_jll]]
 deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
@@ -2236,6 +3108,7 @@ version = "0.15.1+0"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl", "OpenBLAS_jll"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
+version = "5.1.1+0"
 
 [[deps.libfdk_aac_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2258,10 +3131,12 @@ version = "1.3.7+1"
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
+version = "1.48.0+0"
 
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
+version = "17.4.0+0"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2277,13 +3152,14 @@ version = "3.5.0+0"
 
 [[deps.xkbcommon_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Wayland_jll", "Wayland_protocols_jll", "Xorg_libxcb_jll", "Xorg_xkeyboard_config_jll"]
-git-tree-sha1 = "ece2350174195bb31de1a63bea3a41ae1aa593b6"
+git-tree-sha1 = "9ebfc140cc56e8c2156a15ceac2f0302e327ac0a"
 uuid = "d8fb68d0-12a3-5cfd-a85a-d49703b185fd"
-version = "0.9.1+5"
+version = "1.4.1+0"
 """
 
 # ╔═╡ Cell order:
 # ╠═63a9f3aa-31a8-11ec-3238-4f818ccf6b6c
+# ╠═1525f483-b6ac-4b12-90e6-31e97637d282
 # ╠═11f37e01-7958-4e79-a8bb-06b92d7cb9ed
 # ╠═0a29d50e-df0a-4f54-b588-faa6aee2e983
 # ╠═18382e9c-e812-49ff-84cc-faad709bc4c3
@@ -2292,10 +3168,9 @@ version = "0.9.1+5"
 # ╠═4ec0dd6d-9d3d-4d30-8a19-bc91600d9ec2
 # ╟─f997fa16-69e9-4df8-bed9-7067e1a5537d
 # ╟─2f31b286-11aa-443e-a3dc-c021e6fc276c
-# ╟─4263babb-32ae-446f-b6a6-9d5451ed40cd
 # ╟─b1d3fff1-d980-4cc8-99c3-d3db7a71bf60
-# ╟─cfdf3a8e-a377-43ef-8a76-63cf78ce6a16
 # ╟─9396a0d1-6036-44ec-98b7-16df4d150b54
+# ╟─cfdf3a8e-a377-43ef-8a76-63cf78ce6a16
 # ╟─ffe32878-8732-46d5-b57c-9e9bb8e6dd74
 # ╟─784178c3-4afc-4c65-93e1-4265e1faf817
 # ╟─fa56d939-09d5-4b63-965a-38016c957fbb
@@ -2310,6 +3185,9 @@ version = "0.9.1+5"
 # ╟─b38cdb2b-f570-41f4-8996-c7e41551f374
 # ╠═dafbc66b-cbc2-41c9-9a42-da5961d2eaa6
 # ╠═2735cbf5-790d-40b4-ac32-a413bc1d530a
+# ╟─79372251-157d-43a0-9560-4727fbd36ea9
+# ╠═2f1b6992-3082-412d-b966-2b4b278b2ed0
+# ╠═aa4229d3-e221-4a87-8a18-ed376d33d3ac
 # ╟─10a47fa8-f235-4455-892f-9b1457b1f82c
 # ╠═a54788b9-4b1e-4066-b963-d04008bcc242
 # ╠═69128c7a-ddcb-4535-98af-24fc91ec0b7e
@@ -2322,9 +3200,11 @@ version = "0.9.1+5"
 # ╟─21472cb5-d968-4306-b65b-1b25f522dd4d
 # ╠═c5c9bc66-f554-4fa8-a9f3-896875a50627
 # ╠═370a2da6-6de0-44c0-9f70-4e676769f59b
+# ╠═288aa06b-e07b-41cc-a51f-49f780c634b8
 # ╠═9230de54-3ee3-4242-bc34-25a38edfbb6b
 # ╟─24a4ba06-d3ae-4c4b-9ab3-3852273c2fd4
-# ╠═63fe2f55-f5ce-4022-99ee-3bd4e14e6352
+# ╟─8b38bccf-a762-439e-b19b-65e803d3c8f6
+# ╟─63fe2f55-f5ce-4022-99ee-3bd4e14e6352
 # ╠═14314bcc-661a-4e84-886d-20c89c07a28e
 # ╠═c087392c-c411-4368-afcc-f9a104856884
 # ╟─6107a0ce-6f01-4d0b-bd43-78f2125ac185
@@ -2334,6 +3214,8 @@ version = "0.9.1+5"
 # ╠═87c0c3cb-7059-42ae-aed8-98a0ef2eb55f
 # ╟─f9b03b4d-c521-4456-b0b9-d4a301d8a813
 # ╠═355db008-9661-4e54-acd5-7c2c9ba3c7f5
+# ╠═8a6b67d0-8008-4a4c-be7c-0c0b76311385
+# ╠═c2105bee-c29d-4853-9388-31c405283395
 # ╠═564cbc7a-3125-4b67-843c-f4c74ccef51f
 # ╠═d20c1afe-6d5b-49bf-a0f2-a1bbb21c709f
 # ╠═e9687e3f-be56-44eb-af4d-f169558de0fd
@@ -2342,36 +3224,83 @@ version = "0.9.1+5"
 # ╠═7edf8ddf-2b6e-4a4b-8181-6b8bbdd22841
 # ╠═c98025f8-f942-498b-9368-5d524b141c62
 # ╠═d8642b83-e824-429e-ac3e-70e875a47d1a
-# ╟─bb26b859-65d4-4c94-b7fb-d7f5f4d0d8a0
-# ╟─e2ef77de-f986-49c5-bf36-4b9062eedb66
-# ╠═09d9941d-1629-45cb-aa37-6ce43a553dd5
 # ╟─90aff8bb-ed69-40d3-a22f-112f713f4b93
+# ╟─85e789c6-8322-4264-ab70-dc33d64c4de4
+# ╠═43ce27d1-3246-4045-b3aa-a99bcf25cbaa
+# ╠═0832d5e6-7e92-430f-afe3-ddb5e55dc591
 # ╟─4fad0692-05dc-4c3b-9aae-cd9a43519e51
 # ╠═973b56e5-ef3c-4328-ad26-3ab63650537e
 # ╠═3d567640-78d6-4f76-b13e-95be6d5e9c64
 # ╠═06f064cf-fc0d-4f65-bd6b-ddb6e4154f6c
-# ╠═e2f1952d-8fc8-4749-9a88-bf5c61758e14
-# ╠═2bd1d018-986b-4370-95ba-e047e2c7b691
-# ╠═489c807d-2db1-4d9e-9e30-cab403b9281f
 # ╠═ac43808a-ef2a-472d-9a9e-c77257aaa535
+# ╠═da37a5c8-b8ef-4131-a153-50c21461d9c4
+# ╠═a8b1a61c-6bd0-417b-8d58-8c8f8d77da7e
 # ╟─1a6c956e-38cc-4217-aff3-f303af0282a4
+# ╠═e169a987-849f-4cc2-96bc-39f234742d93
 # ╠═ae15e079-231e-4ea2-aabb-ee7d44266c6d
-# ╠═607b3245-53ab-4dca-9c98-8f4b179051e4
-# ╠═2b5277cc-011f-4f3f-b860-2bf1dd568d21
 # ╟─a4b26f44-319d-4b90-8fee-a3ab2418dc47
 # ╠═94da3cc0-6763-40b9-8773-f2a1a2cbe507
 # ╠═69b6d1f1-c46c-43fa-a21d-b1f61fcd7c55
 # ╠═7a27d480-a9cb-4c26-91cd-bf519e8b35fa
+# ╠═2c4375df-5063-43ea-9578-69ec94834362
+# ╠═339a47a1-2b8a-4dc2-9adc-530c53d66fb1
+# ╠═8c819d68-3981-4073-b58f-8fde5b73be33
 # ╠═b367ccc6-934f-4b18-b1db-05286111958f
 # ╠═096a58e3-f417-446e-83f0-84a333880680
 # ╠═c95dc4f2-1f54-4266-bf23-7d24cee7b3d4
 # ╠═d2139819-83a1-4e2b-a605-91d1e686b9a3
 # ╠═fa9ae665-465d-4f3e-b8cd-002c80420adb
 # ╠═6cc17343-c725-4653-ad48-b3535a53b09e
-# ╟─9fa87325-4af3-4ec0-a716-80652dcf2ace
+# ╠═9fa87325-4af3-4ec0-a716-80652dcf2ace
+# ╠═1aace394-c7da-421a-bd4c-e7c7d8b36231
 # ╠═c9e4bc33-046f-4ebd-9da7-a768886107ef
 # ╠═f4b1a0bf-aff3-4b49-b15f-e5fdf31d969c
 # ╠═bde8e418-9391-4c5a-a754-5ae1e3215e66
+# ╠═ac2816ee-c066-4063-ae74-0a143df37a9c
 # ╠═d0c487cb-041f-4c8d-9054-e5f3cfad1ed4
+# ╟─e25f575e-91d5-479e-a752-a831a0692f26
+# ╠═0e7f28f3-53b2-431d-afd9-d2fe6c511863
+# ╠═e0c1c42b-4327-4ad8-b097-92bf08912e3e
+# ╠═47c63b41-4385-479f-b0e9-afae0ed08058
+# ╟─d3cbbcca-b43a-421e-b29f-4388a409de41
+# ╟─bcff0238-4182-4407-a8b7-f19e6b700906
+# ╟─581515a9-3d39-44ac-be92-e3049a36a15d
+# ╟─5a71d63b-a63e-4ad7-abc4-36c2f2c61711
+# ╠═c5f05707-18e2-40ec-bce2-0da371914426
+# ╠═09bf257f-fa33-4bb7-a2b9-77904cf528fe
+# ╠═e4be43f1-28fb-4506-8b91-ea0f4c6d6304
+# ╠═6b3f49a2-a0f5-4005-8034-ce8cb8d00d13
+# ╠═0fa694bf-d13f-4d62-8283-54accad831af
+# ╠═c210a8ba-8b22-42b6-8d87-1d80dfe625bd
+# ╠═15667883-b1fd-422a-ae10-74a22293acb9
+# ╠═f2f0b55b-1a8c-47b8-b4dc-8f2f11556e13
+# ╠═48728be0-acbf-49d5-9ee9-f07fa562f199
+# ╠═c67e1e15-712d-4183-a75c-5361ad1ea5e7
+# ╟─37e6726b-71a3-46bf-9f36-2c38a478fc3e
+# ╠═b33ddf78-0254-4d1c-b0e6-9698a02ae089
+# ╠═e1903c79-da4a-4d4a-9140-b5bb5b49133c
+# ╠═a438af2e-ca31-4427-bc74-e84301d1f9cf
+# ╠═d7e60d83-fa62-451f-99f9-126f8cd0e821
+# ╠═5942cdba-6f0d-4128-8ce3-57826fafad0a
+# ╠═81f415cd-aea3-4c84-aede-c0040f5ac28c
+# ╠═6ebaa094-22b0-4e09-aa7f-eb3492dbf4f6
+# ╠═b28859d1-7c4d-438d-a490-c6407365cd6a
+# ╠═d7d217ce-2a0b-4e18-8aa8-8b5e3af08363
+# ╠═b96306e1-2c38-4245-8d0a-87d503ab9df8
+# ╟─930f7d64-29ef-4e7b-826d-66243e9724e9
+# ╠═03fc1bf9-bcf5-44e9-9542-da9325639907
+# ╠═bcc12d64-1eb8-4edb-b042-57e70ce3b641
+# ╠═d9df62ae-47e7-4bde-907e-9eff4251c17f
+# ╠═20061a57-ac97-409d-8a88-7decef927609
+# ╠═4ba1e06b-f1b9-4faa-99e8-abd133a9052b
+# ╠═92356131-5c26-4257-a148-2b9f49f2c9c6
+# ╠═cae8d738-94f5-47ec-a7cf-4da51c069c75
+# ╠═ac58190d-05bd-4e3e-9797-9bc1ee32b545
+# ╠═15928993-d9fc-4934-a36a-90fb54a322ba
+# ╠═a07bb87e-8321-4aa8-9555-ae33a51c5fa7
+# ╠═cbb6c21f-81fe-4859-be21-2ff3759321fb
+# ╠═cb24610c-2eac-4054-a17c-0ef4f3668f6c
+# ╠═5721178c-e93e-4f2e-b39b-58ebdf9edfb8
+# ╠═5800b6d5-8593-4f1d-95f6-9e3353f63eb2
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
