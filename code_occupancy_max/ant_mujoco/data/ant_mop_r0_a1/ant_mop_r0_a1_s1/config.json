@@ -1,0 +1,64 @@
+{
+    "ac_kwargs":	{
+        "hidden_sizes":	[
+            256,
+            256
+        ]
+    },
+    "actor_critic":	"MLPActorCritic",
+    "alpha":	1.0,
+    "batch_size":	100,
+    "env_fn":	"<function <lambda> at 0x7fabeeed2f80>",
+    "epochs":	300,
+    "exp_name":	"ant_mop_r0_a1",
+    "gamma":	0.999,
+    "logger_kwargs":	{
+        "exp_name":	"ant_mop_r0_a1",
+        "output_dir":	"data/ant_mop_r0_a1/ant_mop_r0_a1_s1"
+    },
+    "lr":	0.0003,
+    "max_ep_len":	5000,
+    "num_test_episodes":	5,
+    "polyak":	0.995,
+    "replay_size":	1000000,
+    "save_freq":	1,
+    "seed":	1,
+    "self":	{
+        "<agent.SAC object at 0x7fabed1ab850>":	{
+            "alpha":	1.0,
+            "batch_size":	100,
+            "env_fn":	"<function <lambda> at 0x7fabeeed2f80>",
+            "epochs":	300,
+            "exp_name":	"ant_mop_r0_a1",
+            "gamma":	0.999,
+            "logger":	{
+                "<logx.EpochLogger object at 0x7fabed1ab880>":	{
+                    "epoch_dict":	{},
+                    "exp_name":	"ant_mop_r0_a1",
+                    "first_row":	true,
+                    "log_current_row":	{},
+                    "log_headers":	[],
+                    "output_dir":	"data/ant_mop_r0_a1/ant_mop_r0_a1_s1",
+                    "output_file":	{
+                        "<_io.TextIOWrapper name='data/ant_mop_r0_a1/ant_mop_r0_a1_s1/progress.txt' mode='w' encoding='UTF-8'>":	{
+                            "mode":	"w"
+                        }
+                    }
+                }
+            },
+            "max_ep_len":	5000,
+            "num_test_episodes":	5,
+            "polyak":	0.995,
+            "save_freq":	1,
+            "seed":	1,
+            "start_steps":	20000,
+            "steps_per_epoch":	10000,
+            "update_after":	1000,
+            "update_every":	16
+        }
+    },
+    "start_steps":	20000,
+    "steps_per_epoch":	10000,
+    "update_after":	1000,
+    "update_every":	16
+}
