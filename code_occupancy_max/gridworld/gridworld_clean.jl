@@ -242,9 +242,6 @@ begin
 	#reward_mags = [30,-40,-30,-20,-10]
 end
 
-# ╔═╡ ec119eb7-894c-4eb1-95ea-4b4dae9526c3
-transition_s([5,3],[1,1],env1),transition_u([5,3],10,[1,1],env1)
-
 # ╔═╡ 403a06a7-e30f-4aa4-ade1-55dee37cd514
 function draw_environment(x_pos,y_pos,u,env::environment,pars)
 	reward_sizes = env.reward_mags
@@ -280,7 +277,7 @@ function draw_environment(x_pos,y_pos,u,env::environment,pars)
 end
 
 # ╔═╡ ac3a4aa3-1edf-467e-9a47-9f6d6655cd04
-md"# H agent"
+md"# MOP agent"
 
 # ╔═╡ c6870051-0241-4cef-9e5b-bc876a3894fa
 function h_iteration(env::environment,params;tolerance = 1E-2, n_iter = 100,verbose = false)
@@ -627,9 +624,6 @@ q_value,t_stop_q = q_iteration(env1,0.0,params,0.1,30,true);
 #Specific one
 #q_value = reshape(readdlm("values/q_value_gain_$(food_gain)_eps_$(ϵ).dat"),env1.sizex,env1.sizey,env1.sizeu);
 
-# ╔═╡ 29a4d235-8b03-4701-af89-cd289f212e7d
-#writedlm("q_value_u_$(env1.sizeu).dat",q_value)
-
 # ╔═╡ 819c1be2-339f-4c37-b8a3-9d8cb6be6496
 u_q = 20
 
@@ -680,9 +674,6 @@ function optimal_policy_q(s,u,value,ϵ,env::environment,pars)
 	end
 	actions,policy,length(best_actions)
 end
-
-# ╔═╡ 005720d3-5920-476b-9f96-39971f512452
-optimal_policy_q([3,3],20,q_value,ϵ,env1,params)
 
 # ╔═╡ 2379dcc3-53cb-4fb6-b1e8-c851e36acd1f
 function sample_trajectory_q(s_0,u_0,opt_value,ϵ,max_t,env::environment,pars,occupancies = false)
@@ -849,15 +840,6 @@ function KL_iteration(env::environment,params;tolerance = 1E-2, n_iter = 100,ver
 	value,t_stop
 end
 
-# ╔═╡ ad2855ee-ffc3-4910-a307-2e908b93706b
-axs,_ = adm_actions([3,3],50,env1,params_fa)
-
-# ╔═╡ 5b3bbb53-d5f7-462b-8425-c8c6c4ff3865
-length(axs)
-
-# ╔═╡ 828b1bcd-a093-463c-bb2f-4c1b5359939c
-optimal_policy([1,2],4,h_value_fa,env1,params_fa)
-
 # ╔═╡ c7bc355d-d8dd-4b82-ac81-1b9a6d5f71e0
 KL_value_va,_ = KL_iteration(env1,params,tolerance = 0.1,n_iter = 30,verbose =false);
 
@@ -889,9 +871,6 @@ function optimal_policyKL(s,u,optimal_value,env::environment,params;verbose = fa
 	policy = policy./sum(policy)
 	actions,policy
 end
-
-# ╔═╡ 91826a58-ebd5-4e2f-8836-ad6cff22406e
-optimal_policyKL([1,2],4,KL_value_fa,env1,params_fa,fixed_default = true)
 
 # ╔═╡ cb3280eb-8453-4040-aac0-22c1dc93b9d9
 function create_episode_KL(s_0,u_0,value,max_t,env,pars;fd = false)
@@ -1045,12 +1024,6 @@ function n_step_transition(s,u,n_action,env,pars_emp)
 	s_temp,u_temp
 end
 
-# ╔═╡ 49df9fba-22a8-48e9-8278-22ffdfc7765f
-s_p = n_step_transition([1,1],1,[[-1,1],[0,0]],env1,p_emp)
-
-# ╔═╡ 3dd47db4-2485-4833-8172-3fe7a3fe2214
-i_p = build_index(s_p[1],s_p[2],env1)
-
 # ╔═╡ e4dcc71c-4cc6-4b8f-88ad-7c2c18e5af02
 function empowerment(s_state,u_state,env,pars_emp)
 	actions,_ = adm_actions_emp(s_state,u_state,env,pars_emp.constant_actions)
@@ -1178,8 +1151,13 @@ begin
 	us_emp = [states_emp_read[i,3] for i in 1:length(states_emp_read[:,1])]
 end
 
+# ╔═╡ 8223270e-9853-4324-b9b4-8ba5e988a006
+md"Produce animation? $(@bind movie_emp CheckBox(default = false))"
+
 # ╔═╡ 0a693ea2-9506-4217-86d7-514678c03104
-anim_emp = animation([[states_emp[i][1]] for i in 1:length(states_emp)],[[states_emp[i][2]] for i in 1:length(states_emp)],us_emp,length(states_emp),env_emp,color = palette(:default)[1],title = "$(p_emp.n)-step empowerment")
+if movie_emp == true
+	anim_emp = animation([[states_emp[i][1]] for i in 1:length(states_emp)],[[states_emp[i][2]] for i in 1:length(states_emp)],us_emp,length(states_emp),env_emp,color = palette(:default)[1],title = "$(p_emp.n)-step empowerment")
+end
 
 # ╔═╡ 118e6de3-b525-42e5-8c0c-654c525a4684
 gif(anim_emp, fps = 10, "grid_world_11x11_emp_n_$(p_emp.n)_t_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).gif")
@@ -1212,9 +1190,6 @@ end
 	β = 1
 	constant_actions = false
 end
-
-# ╔═╡ d99990c1-1b0c-4d52-87a3-6b3bd363fde7
-
 
 # ╔═╡ 00025055-7ec0-486d-bb29-8e769e08fcc8
 function AIF_iteration(env, pars)
@@ -1350,13 +1325,18 @@ horizons = [20,30,50,100,200,500,1000]
 begin
 	v_AIF = readdlm("AIF/values/rew_beta_$(p_AIF.β)_horizon_$(p_AIF.H).dat")
 	v_AIF = reshape(v_AIF,env_AIF.sizex,env_AIF.sizey,env_AIF.sizeu)
-end
+end;
 
 # ╔═╡ 38d916de-9068-4f37-9ace-81e115d731bc
 states_AIF_anim,us_AIF_anim,actions_AIF_anim,values_AIF_anim = create_episode_AIF([3,3],30,v_AIF,max_t_anim,env_AIF,p_AIF)
 
+# ╔═╡ 9cf3738d-a156-43a6-a5ab-1074b2f6df25
+md"Produce animation? $(@bind movie_aif CheckBox(default = false))
+
 # ╔═╡ 6046a1ae-ec46-490c-baa7-1534f72c5ea9
-anim_AIF = animation([[states_AIF_anim[i][1]] for i in 1:length(states_AIF_anim)],[[states_AIF_anim[i][2]] for i in 1:length(states_AIF_anim)],us_AIF_anim,length(states_AIF_anim),env_AIF,color = palette(:default)[1],title = "H = $(p_AIF.H) EFE agent, \$\\beta = $(p_AIF.β)\$")
+if movie_aif == true
+	anim_AIF = animation([[states_AIF_anim[i][1]] for i in 1:length(states_AIF_anim)],[[states_AIF_anim[i][2]] for i in 1:length(states_AIF_anim)],us_AIF_anim,length(states_AIF_anim),env_AIF,color = palette(:default)[1],title = "H = $(p_AIF.H) EFE agent, \$\\beta = $(p_AIF.β)\$")
+end
 
 # ╔═╡ 9ec3d452-5cc0-447d-8965-9b487f39650a
 gif(anim_AIF, fps = 10, "AIF/rew_beta_$(p_AIF.β)_h_$(p_AIF.H).gif")
@@ -1409,9 +1389,6 @@ end
 # ╔═╡ 48ade83b-bd73-4570-9a14-590f6f846097
 anim3 = animation3(h_xpos_anim,h_ypos_anim,h_us_anim,[[states_emp[i][1]] for i in 1:length(states_emp)],[[states_emp[i][2]] for i in 1:length(states_emp)],us_emp,[[states_AIF_anim[i][1]] for i in 1:length(states_AIF_anim)],[[states_AIF_anim[i][2]] for i in 1:length(states_AIF_anim)],us_AIF_anim,200,env1)
 
-# ╔═╡ d51573c2-f8b8-4785-bc14-3f611a34a924
-us_emp
-
 # ╔═╡ c515caee-858d-4e1f-b021-7dd5b8648549
 gif(anim3,fps = 10,"MOP_MPOW_EFE.gif")
 
@@ -1460,9 +1437,6 @@ begin
 	survival_pcts_AIF = readdlm("AIF/survivals/suvival_pcts_rew_beta_$(β_survivals)_horizons_$(horizons).dat")
 	entropies_AIF = readdlm("AIF/survivals/entropies_rew_beta_$(β_survivals)_horizons_$(horizons).dat")
 end
-
-# ╔═╡ a12232f3-0c6b-44c2-bcba-f150a1f39c88
-entropies_AIF
 
 # ╔═╡ b92cde2a-bc29-4417-8a88-0f527a1b790e
 begin
@@ -1613,9 +1587,6 @@ function optimal_policy_toy(s,optimal_value,env::environment,pars_toy;verbose = 
 	policy = policy./sum(policy)
 	actions,policy
 end
-
-# ╔═╡ 52a823a0-4fb9-4fcf-87d6-beecc2cb1ab2
-optimal_policy_toy([2,1],val_toy,toy_arena,pars_toy)
 
 # ╔═╡ b38a0ef8-4889-4f56-a41e-8d5173c5db50
 function sample_trajectory_toy(s_0,max_t,opt_value,env,params)
@@ -2314,12 +2285,6 @@ states_KL_fa,_,_,_ = create_episode_KL(s_0,50,KL_value_fa,max_t,env1,params_fa,f
 # ╔═╡ 55fdc810-fb0c-4d63-8010-f65200bceb5d
 states_KL_va,_,_,_ = create_episode_KL(s_0,50,KL_value_va,max_t,env1,params)
 
-# ╔═╡ e3ff07ca-6c46-4be9-bf78-3c09bed248f6
-length(states_KL_va),length(states_KL_fa)
-
-# ╔═╡ d6d26401-22eb-4e8d-8b2a-13223167a949
-max_t
-
 # ╔═╡ 0a55db1e-4dc7-4195-aa2f-564d770afa8c
 states_AIF,us_AIF,actions_AIF,values_AIF = create_episode_AIF(s_0,50,v_AIF,max_t,env_AIF,p_AIF)
 
@@ -2467,9 +2432,6 @@ begin
 	Random.seed!(11)
 	_,_,_,h_xpos_fa,h_ypos_fa,_= sample_trajectory([3,3],50,h_value_fa,max_t,env1,params_fa)
 end
-
-# ╔═╡ 4b5eaa5a-df95-4060-bb99-1e69ccaf8533
-h_xpos_fa
 
 # ╔═╡ d66ab0d0-249d-464b-92d7-a0493338b7d0
 begin
@@ -4101,13 +4063,12 @@ version = "1.4.1+1"
 # ╠═986f5441-9361-4074-a7f6-7affe650e555
 # ╟─194e91cb-b619-4908-aebd-3136107175b7
 # ╟─a46ced5b-2e58-40b2-8eb6-b4840043c055
-# ╠═9404080e-a52c-42f7-9abd-ea488bf7abc2
-# ╠═0dcdad0b-7acc-4fc4-93aa-f6eacc077cd3
-# ╠═0ce119b1-e269-41e2-80b7-991cae37cf5f
-# ╠═8675158f-97fb-4222-a32b-49ce4f6f1d41
-# ╠═ec119eb7-894c-4eb1-95ea-4b4dae9526c3
+# ╟─9404080e-a52c-42f7-9abd-ea488bf7abc2
+# ╟─0dcdad0b-7acc-4fc4-93aa-f6eacc077cd3
+# ╟─0ce119b1-e269-41e2-80b7-991cae37cf5f
+# ╟─8675158f-97fb-4222-a32b-49ce4f6f1d41
 # ╟─92bca36b-1dc9-4c03-88c0-6a684dfbec9f
-# ╠═c96e3331-1dcd-4b9c-b28d-d74493c8934d
+# ╟─c96e3331-1dcd-4b9c-b28d-d74493c8934d
 # ╟─d0a5c0fe-895f-42d8-9db6-3b0fcc6bb43e
 # ╠═155056b5-21ea-40d7-8cce-19fde5a1b150
 # ╟─6c716ad4-23c4-46f8-ba77-340029fcce87
@@ -4117,15 +4078,15 @@ version = "1.4.1+1"
 # ╠═bd16a66c-9c2f-449c-a792-1073c54e990b
 # ╟─ac3a4aa3-1edf-467e-9a47-9f6d6655cd04
 # ╟─c6870051-0241-4cef-9e5b-bc876a3894fa
-# ╠═a6fbddc0-7def-489e-9ad1-2e6a5e68eddd
+# ╟─a6fbddc0-7def-489e-9ad1-2e6a5e68eddd
 # ╠═d88e0e27-2354-43ad-9c26-cdc90beeea0f
 # ╟─184636e2-c87d-4a89-b231-ff4aef8424d5
 # ╠═82fbe5a0-34a5-44c7-bdcb-36d16f09ea7b
 # ╠═a11b198f-0a55-4529-b44c-270f37ef773a
-# ╠═73722c01-adee-4bfd-97b4-60f2ced23725
-# ╠═25e35560-5d80-4388-8002-fd29d0541b18
+# ╟─73722c01-adee-4bfd-97b4-60f2ced23725
+# ╟─25e35560-5d80-4388-8002-fd29d0541b18
 # ╠═e67db730-ca7c-4ef4-a2d2-7e001d5f7a79
-# ╠═76f506dc-b21d-4e13-a8e8-9d1b3bd21b30
+# ╟─76f506dc-b21d-4e13-a8e8-9d1b3bd21b30
 # ╟─aa5e5bf6-6504-4c01-bb36-df0d7306f9de
 # ╟─ef9e78e2-d61f-4940-9e62-40c6d060353b
 # ╟─a4457d71-27dc-4c93-81ff-f21b2dfed41d
@@ -4136,20 +4097,18 @@ version = "1.4.1+1"
 # ╠═11b5409c-9db8-4b34-a111-7a62fedd23be
 # ╟─f98d6ea0-9d98-4940-907c-455397158f3b
 # ╟─5f4234f5-fc0e-4cdd-93ea-99b6463b2ba1
-# ╠═7a0173ac-240d-4f93-b413-45c6af0f4011
+# ╟─7a0173ac-240d-4f93-b413-45c6af0f4011
 # ╠═27011f44-929a-4899-b822-539d270959e1
 # ╠═caadeb3b-0938-4559-8122-348c960a6eb1
-# ╠═29a4d235-8b03-4701-af89-cd289f212e7d
 # ╠═819c1be2-339f-4c37-b8a3-9d8cb6be6496
-# ╟─358bc5ca-c1f6-40f1-ba2d-7e8466531903
-# ╠═40d62df0-53bb-4b46-91b7-78ffd621a519
-# ╟─005720d3-5920-476b-9f96-39971f512452
-# ╠═2379dcc3-53cb-4fb6-b1e8-c851e36acd1f
+# ╠═358bc5ca-c1f6-40f1-ba2d-7e8466531903
+# ╟─40d62df0-53bb-4b46-91b7-78ffd621a519
+# ╟─2379dcc3-53cb-4fb6-b1e8-c851e36acd1f
 # ╟─6e7b6b2a-5489-4860-930e-47b7df014840
 # ╟─2ed5904d-03a3-4999-a949-415d0cf47328
 # ╠═787bbe73-6052-41e0-bc8c-955e4a884886
 # ╠═139c806d-3f52-4fb9-9fe8-c57259ed1b6f
-# ╠═6a29cc32-6abf-41c1-b6e3-f4cb33b76f46
+# ╟─6a29cc32-6abf-41c1-b6e3-f4cb33b76f46
 # ╠═a5f43388-9e45-497f-b0f8-7f2987b3102d
 # ╠═293c129d-dba4-4b04-aa0a-66e1b570aad4
 # ╟─ba9a241e-93b7-42fd-b790-d6010e2435bd
@@ -4157,21 +4116,15 @@ version = "1.4.1+1"
 # ╠═a6e21529-00eb-40b8-9f40-b8b26171eaad
 # ╠═c8c70b3f-45d5-4d38-95af-85ae85d1233c
 # ╟─a14df073-5b27-4bdb-b4c8-03927909b12e
-# ╠═ad2855ee-ffc3-4910-a307-2e908b93706b
-# ╠═5b3bbb53-d5f7-462b-8425-c8c6c4ff3865
-# ╠═91826a58-ebd5-4e2f-8836-ad6cff22406e
-# ╠═828b1bcd-a093-463c-bb2f-4c1b5359939c
 # ╠═c7bc355d-d8dd-4b82-ac81-1b9a6d5f71e0
 # ╠═af848419-950a-4827-bc4e-fc3e8facd1a8
-# ╠═f405c26e-f911-4dea-9364-f751259acf43
-# ╠═cb3280eb-8453-4040-aac0-22c1dc93b9d9
+# ╟─f405c26e-f911-4dea-9364-f751259acf43
+# ╟─cb3280eb-8453-4040-aac0-22c1dc93b9d9
 # ╠═01606177-e88b-453c-ae34-8b3f5755bb82
 # ╠═4f5d1b29-90a2-4b79-9ce0-30764e6d3350
-# ╠═4b5eaa5a-df95-4060-bb99-1e69ccaf8533
 # ╠═e1c59a22-fdd8-4edd-86d5-9efd9aca69a5
-# ╠═e3ff07ca-6c46-4be9-bf78-3c09bed248f6
 # ╠═55fdc810-fb0c-4d63-8010-f65200bceb5d
-# ╠═0714bc63-22d9-4f7f-a2d7-b4292575e05c
+# ╟─0714bc63-22d9-4f7f-a2d7-b4292575e05c
 # ╠═69a5d51e-84dd-4d81-8f26-19d4eb8cc9bc
 # ╟─7431c898-bbef-422e-af13-480d2e912d16
 # ╟─86685690-c31d-4b71-b070-43fdb18e48db
@@ -4180,8 +4133,6 @@ version = "1.4.1+1"
 # ╠═c555b1ac-ed4f-4767-9680-0e7ef7ab758f
 # ╟─33df863c-bf8c-4624-9fd3-1d3a569a4f61
 # ╟─01aaed4b-e028-49c9-90b4-a6c4158929f1
-# ╠═49df9fba-22a8-48e9-8278-22ffdfc7765f
-# ╠═3dd47db4-2485-4833-8172-3fe7a3fe2214
 # ╟─e4dcc71c-4cc6-4b8f-88ad-7c2c18e5af02
 # ╠═4121c28e-010e-428a-8e9a-544231dc6c0b
 # ╠═1c5176b2-f7e0-4a9a-b07c-392840294aa0
@@ -4190,13 +4141,12 @@ version = "1.4.1+1"
 # ╠═b1737188-4e57-4d81-a1fa-b55e1621a7dc
 # ╠═73b6c6e3-0c3c-46d5-a109-1f512b6871ee
 # ╠═8ec4f121-410a-49c6-8ae5-f8e014757fc7
+# ╠═8223270e-9853-4324-b9b4-8ba5e988a006
 # ╠═0a693ea2-9506-4217-86d7-514678c03104
 # ╠═118e6de3-b525-42e5-8c0c-654c525a4684
 # ╟─3014c91c-b705-42e1-9689-ebb1c357f8b2
 # ╠═49124160-32b0-4e09-904c-9547697cbfd1
 # ╠═521717ad-23b7-4bca-bc8d-a2387946e55d
-# ╠═d6d26401-22eb-4e8d-8b2a-13223167a949
-# ╠═d99990c1-1b0c-4d52-87a3-6b3bd363fde7
 # ╟─00025055-7ec0-486d-bb29-8e769e08fcc8
 # ╟─b7c66258-bb37-4660-9b22-783a50d4c6f8
 # ╟─4f6cdf92-0821-4d39-ae15-1844a4a29482
@@ -4208,13 +4158,13 @@ version = "1.4.1+1"
 # ╠═0a55db1e-4dc7-4195-aa2f-564d770afa8c
 # ╠═38d916de-9068-4f37-9ace-81e115d731bc
 # ╠═f0cb716c-620b-4632-9022-f7b9880ac98e
+# ╠═9cf3738d-a156-43a6-a5ab-1074b2f6df25
 # ╠═6046a1ae-ec46-490c-baa7-1534f72c5ea9
 # ╠═9ec3d452-5cc0-447d-8965-9b487f39650a
-# ╠═51432185-5447-45a5-8734-f85ad54b5602
+# ╟─51432185-5447-45a5-8734-f85ad54b5602
 # ╠═48ade83b-bd73-4570-9a14-590f6f846097
-# ╠═d51573c2-f8b8-4785-bc14-3f611a34a924
 # ╠═c515caee-858d-4e1f-b021-7dd5b8648549
-# ╠═df4ce514-884c-401a-85f3-02ec37444816
+# ╟─df4ce514-884c-401a-85f3-02ec37444816
 # ╠═446c2897-8db9-452d-9d11-4cf7cc9bfa8a
 # ╠═89c24ce1-87ce-4145-b3e7-bc6da50b94bf
 # ╠═8dcb6536-3737-4d58-862e-094218874040
@@ -4222,7 +4172,6 @@ version = "1.4.1+1"
 # ╠═a8152784-c97f-4937-8791-166a411eee80
 # ╠═e9b5ab32-0899-4e3d-b1cb-c986ae82b12d
 # ╠═b8ce5e63-5f88-424f-8d78-0910b0f88762
-# ╠═a12232f3-0c6b-44c2-bcba-f150a1f39c88
 # ╠═188dc342-f0ae-4df1-adf6-bce3da9d5d76
 # ╠═b92cde2a-bc29-4417-8a88-0f527a1b790e
 # ╟─d801413b-adff-48f0-aa90-89a1af1c0d63
@@ -4236,10 +4185,9 @@ version = "1.4.1+1"
 # ╟─0beeaba3-e0a7-4975-8e50-0c72ca3df314
 # ╠═4c79a36c-e679-4fe1-a036-e19f649f4997
 # ╟─0f656395-ffc7-4010-abb9-04b43121bcfb
-# ╠═52a823a0-4fb9-4fcf-87d6-beecc2cb1ab2
 # ╠═b38a0ef8-4889-4f56-a41e-8d5173c5db50
 # ╠═f66c8ed5-db75-45f0-9962-e63a04caae80
-# ╠═58b6f009-bd69-4bb7-bd44-c395718fae5d
+# ╟─58b6f009-bd69-4bb7-bd44-c395718fae5d
 # ╠═84b2cdf6-1f82-4493-9aa7-97ea74bd9592
 # ╟─9eff1101-d2f8-4952-8efe-d8e6ce9bc195
 # ╟─496c1dbe-1052-45c1-9448-31befea96222
@@ -4251,7 +4199,7 @@ version = "1.4.1+1"
 # ╠═ffd1a342-c46e-4016-a24b-fc98e4498890
 # ╠═3fb25daf-c9af-4746-b8a6-91bc01e4d12b
 # ╠═9f11779e-c23e-41d3-a51d-eb88db85c7fd
-# ╠═a134c7d5-15e6-4a22-bc34-56a3155b88dd
+# ╟─a134c7d5-15e6-4a22-bc34-56a3155b88dd
 # ╠═f2275b68-335a-4383-9ad9-b2e47286f008
 # ╟─53e6d8b6-fe76-4b1a-b6e4-8c55fc58db7d
 # ╠═d66ab0d0-249d-464b-92d7-a0493338b7d0
@@ -4260,7 +4208,7 @@ version = "1.4.1+1"
 # ╠═20cba048-e6c8-42d3-ad15-8091a8fd9bfc
 # ╠═9b45f045-77d6-43c1-a7a0-5d4d5c7af480
 # ╟─e7578dbf-ac6c-414c-9e08-1ed9636177f7
-# ╠═6b3fb79f-be03-4d90-9527-83e868cdaddd
+# ╟─6b3fb79f-be03-4d90-9527-83e868cdaddd
 # ╟─5b1ba4f6-37a9-4e61-b6cc-3d495aa67c9d
 # ╟─a0dc952c-e733-41de-8d6e-458d66c3769a
 # ╠═b17456b8-3d6a-4c31-95f2-036c5fd90ea3
@@ -4292,7 +4240,7 @@ version = "1.4.1+1"
 # ╠═d2f49d6b-2acc-4fef-8e24-9acdd7591977
 # ╠═6dcaa4f7-a539-412f-8ee0-f1f9dfba831f
 # ╠═94430097-f64f-4d27-aa0f-24aec2042d5d
-# ╠═abb61da7-3711-4fa6-a021-2bb916411019
+# ╟─abb61da7-3711-4fa6-a021-2bb916411019
 # ╟─1c69c08b-aae5-453e-98ef-df35c7b4db50
 # ╠═0a9dc717-dbcb-4b27-8c76-cb8fbfdbec96
 # ╟─1f3be0d8-d296-4eb0-a951-bd862914ae92
@@ -4301,7 +4249,7 @@ version = "1.4.1+1"
 # ╠═78a5caf6-eced-4783-b950-26563f632be2
 # ╠═4a868ec2-b636-4d5d-a248-0a4e0cca3668
 # ╠═6edb5b48-b590-492d-bd3e-6a4f549aae30
-# ╠═4c51afa2-e294-4922-9cae-d087582d771c
+# ╟─4c51afa2-e294-4922-9cae-d087582d771c
 # ╠═c842a822-462b-4849-86f1-3fc717c492c1
 # ╠═42423e46-2446-4cdd-84c1-fe824e5eb3c4
 # ╠═d3a2593d-0d55-470c-bff1-4d80714a6f3a
