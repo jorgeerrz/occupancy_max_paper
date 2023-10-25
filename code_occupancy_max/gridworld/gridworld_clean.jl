@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.12
+# v0.19.27
 
 using Markdown
 using InteractiveUtils
@@ -24,6 +24,9 @@ end
 
 # ╔═╡ 25c56490-3b9c-4825-b91d-8b9e41fc0f6b
 using LinearAlgebra
+
+# ╔═╡ 99246057-6b37-4d85-ae77-2a4210fac365
+using StatsBase
 
 # ╔═╡ 422493c5-8a90-4e70-bd06-40f8e6b254f1
 gr()
@@ -66,13 +69,14 @@ end
 	η = 0.5
 	α = 1
 	β = 0
+	constant_actions = true
 end
 
 # ╔═╡ 986f5441-9361-4074-a7f6-7affe650e555
-params = paras(α = 1)
+params = paras(α = 1,constant_actions = false)
 
 # ╔═╡ 194e91cb-b619-4908-aebd-3136107175b7
-function adm_actions(s_state,u_state,env::environment, constant_actions = false)
+function adm_actions(s_state,u_state,env::environment, pars)
 	out = Any[]
 	moving_actions = [[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,1],[-1,-1],[1,-1]]
 	ids_actions = collect(1:length(moving_actions))
@@ -83,7 +87,7 @@ function adm_actions(s_state,u_state,env::environment, constant_actions = false)
 			out = deepcopy(moving_actions)
 			#When we constrain by hand the amount of actions
 			#we delete some possible actions
-			if constant_actions == false
+			if pars.constant_actions == false
 				#Give all possible actions by default
 				#Check the boundaries of gridworld
 				for it in 1:2
@@ -144,7 +148,7 @@ function transition_s(s,a,env)
 			s_prime = s
 		end
 	end
-	s_prime
+	[s_prime]
 end
 
 # ╔═╡ 0dcdad0b-7acc-4fc4-93aa-f6eacc077cd3
@@ -238,8 +242,11 @@ begin
 	#reward_mags = [30,-40,-30,-20,-10]
 end
 
+# ╔═╡ ec119eb7-894c-4eb1-95ea-4b4dae9526c3
+transition_s([5,3],[1,1],env1),transition_u([5,3],10,[1,1],env1)
+
 # ╔═╡ 403a06a7-e30f-4aa4-ade1-55dee37cd514
-function draw_environment(x_pos,y_pos,u,env::environment)
+function draw_environment(x_pos,y_pos,u,env::environment,pars)
 	reward_sizes = env.reward_mags
 	#Draw obstacles
 	ptest = scatter(env.obstaclesx,env.obstaclesy,markershape = :square, markersize = 20, color = "gray")
@@ -250,7 +257,7 @@ function draw_environment(x_pos,y_pos,u,env::environment)
 	#Draw agent
 	plot!(ptest, gridalpha = 0.8,  xticks = collect(0.5:env.sizex+0.5), yticks = collect(0.5:env.sizey+0.5), tickfontcolor = :white, grid = true, ylim=(0.5,env.sizey +0.5), xlim=(0.5,env.sizex +0.5))
 	#Draw arrows
-	actions,_ = adm_actions([x_pos[1],y_pos[1]],u[1],env)
+	actions,_ = adm_actions([x_pos[1],y_pos[1]],u[1],env,pars)
 	arrow_x = zeros(length(actions))
 	arrow_y = zeros(length(actions))
 	aux = actions
@@ -289,10 +296,10 @@ function h_iteration(env::environment,params;tolerance = 1E-2, n_iter = 100,verb
 				ids = findall(i -> i == s,env.obstacles)
 				#Only update value for non-obstacle states
 				if length(ids) == 0
-					actions,_ = adm_actions(s,u,env)
+					actions,_ = adm_actions(s,u,env,params)
 					Z = 0
 					for a in actions
-						s_primes = reachable_states(s,a)
+						s_primes = transition_s(s,a,env)
 						expo = 0
 						for s_prime in s_primes
 							u_prime = transition_u(s,u,a,env)
@@ -318,6 +325,28 @@ function h_iteration(env::environment,params;tolerance = 1E-2, n_iter = 100,verb
 		value_old = deepcopy(value)
 	end
 	value,t_stop
+end
+
+# ╔═╡ a6fbddc0-7def-489e-9ad1-2e6a5e68eddd
+function optimal_policy(s,u,optimal_value,env::environment,params;verbose = false)
+	actions,_ = adm_actions(s,u,env,params)
+	policy = zeros(length(actions))
+	Z = exp(optimal_value[s[1],s[2],u])
+	#Only compute policy for available actions
+	for (idx,a) in enumerate(actions)
+		u_p = transition_u(s,u,a,env)
+		s_p = transition_s(s,a,env)[1]
+		policy[idx] = exp(env.γ*optimal_value[s_p[1],s_p[2],u_p]/params.α-optimal_value[s[1],s[2],u])
+	end
+	#adjust for numerical errors in probability
+	sum_p = sum(policy)
+	if verbose == true
+		println("state = ", s, " u = ", u)
+		println("policy = ", policy)
+		println("sum policy = ", sum(policy))
+	end
+	policy = policy./sum(policy)
+	actions,policy
 end
 
 # ╔═╡ d88e0e27-2354-43ad-9c26-cdc90beeea0f
@@ -348,7 +377,7 @@ md"## Optimal value function"
 # ╔═╡ 82fbe5a0-34a5-44c7-bdcb-36d16f09ea7b
 begin
 	#To compute
-	env_c = initialize_fourrooms(size_x,size_y,10,reward_locations,reward_mags)
+	env_c = initialize_fourrooms(size_x,size_y,50,reward_locations,reward_mags)
 	h_value,t_stop = h_iteration(env1,params,tolerance = 0.1,n_iter = 30,verbose =true)
 	#Specific one
 	#h_value = reshape(readdlm("values/h_value_gain_$(food_gain).dat"),env1.sizex,env1.sizey,env1.sizeu)
@@ -357,12 +386,145 @@ end;
 # ╔═╡ a11b198f-0a55-4529-b44c-270f37ef773a
 #writedlm("h_value_u_$(env1.sizeu).dat",h_value)
 
+# ╔═╡ 25e35560-5d80-4388-8002-fd29d0541b18
+function arrow0!(x, y, u, v; as=0.07, lw=1, lc=:black, la=1)
+    nuv = sqrt(u^2 + v^2)
+    v1, v2 = [u;v] / nuv,  [-v;u] / nuv
+    v4 = (3*v1 + v2)/3.1623  # sqrt(10) to get unit vector
+    v5 = v4 - 2*(v4'*v2)*v2
+    v4, v5 = as*nuv*v4, as*nuv*v5
+    plot!([x,x+u], [y,y+v], lw=lw, lc=lc, la=la)
+    plot!([x+u,x+u-v5[1]], [y+v,y+v-v5[2]], lw=lw, lc=lc, la=la)
+    plot!([x+u,x+u-v4[1]], [y+v,y+v-v4[2]], lw=lw, lc=lc, la=la)
+end
+
+# ╔═╡ 73722c01-adee-4bfd-97b4-60f2ced23725
+function plot_optimal_policy(p,u,opt_value,env::environment,constant_actions = false; arrow_length = 0.6,arrow_width = 1.4)
+	for x in 1:env.sizex
+		for y in 1:env.sizey 
+			ids = findall(i -> i == [x,y],env.obstacles)
+			if length(ids) == 0
+				actions,probs = optimal_policy([x,y],u,opt_value,env,params,verbose = false)
+				arrow_x = zeros(length(actions))
+				arrow_y = zeros(length(actions))
+				aux = actions.*probs
+				for i in 1:length(aux)
+					arrow_x[i] = aux[i][1]*arrow_length
+					arrow_y[i] = aux[i][2]*arrow_length
+				end
+				arrow0!.(ones(Int64,length(aux))*x,ones(Int64,length(aux))*y,arrow_x,arrow_y,as = 0.4,lw = arrow_width)
+				#quiver!(p,ones(Int64,length(aux))*x,ones(Int64,length(aux))*y,quiver = (arrow_x,arrow_y),color = "green",linewidth = 1)
+				#scatter!(p,ones(Int64,length(aux))*x + arrow_x, ones(Int64,length(aux))*y + arrow_y,markersize = probs*10, color = "red")
+				scatter!(p,[x + arrow_x[end]], [y + arrow_y[end]],markersize = probs[end]*15, color = "red")
+			end
+		end
+	end
+end		
+
 # ╔═╡ e67db730-ca7c-4ef4-a2d2-7e001d5f7a79
-u = 10
-#@bind u PlutoUI.Slider(1:env1.sizeu)
+u = 6
+#@bind u PlutoUI.Slider(1:env_c.sizeu,default = 10)
+
+# ╔═╡ 76f506dc-b21d-4e13-a8e8-9d1b3bd21b30
+begin
+	clim_v = (6,16)#(minimum(h_value[3,:,u]),maximum(h_value[3,:,u]))
+		
+	p1 = heatmap(transpose(h_value[:,:,u]), title = "\$V^*(x,y, u = $(u-1))\$",clims = clim_v)
+	#Draw obstacles
+	plot!(p1,env1.obstaclesx,env1.obstaclesy,bins = (collect(0.5:1:env1.sizex + 0.5),collect(0.5:1:env1.sizey + 0.5)), st = :histogram2d, color = "#464646",colorbar = false)
+	#Draw value
+	for i in 1:length(env1.reward_mags)
+		if reward_mags[i]  > 0
+			col = "green"
+		else
+			col = "gray"
+		end
+		scatter!(p1,[env_c.reward_locations[i][1]],[env_c.reward_locations[i][2]], color = col, markersize = min(abs(env1.reward_mags[i]),50))
+	end
+
+	plot!(p1,size = (400,420)) 
+	plot_optimal_policy(p1,u,h_value,env1,arrow_length = 0.8,arrow_width = 1.5)
+	#p2 = heatmap(val_stoch[:,:,u], title = "value function random walk")
+	plot(p1,legend = false,axis = false,dpi = 300)
+	#savefig("optimal_value_function_deterministic.pdf")
+end
 
 # ╔═╡ aa5e5bf6-6504-4c01-bb36-df0d7306f9de
 md"## Sample trajectory"
+
+# ╔═╡ ef9e78e2-d61f-4940-9e62-40c6d060353b
+function sample_trajectory(s_0,u_0,opt_value,max_t,env::environment,params,occupancies = false)
+	xpositions = Any[]
+	ypositions = Any[]
+	u_states = Any[]
+	all_x = Any[]
+	all_y = Any[]
+	urgency = Any[]
+	dead_times = Any[]
+	push!(xpositions,[s_0[1]])
+	push!(ypositions,[s_0[2]])
+	push!(all_x,s_0[1])
+	push!(all_y,s_0[2])
+	push!(u_states,u_0)
+	unvisited_s_states = Any[]
+	unvisited_u_states = collect(1:env.sizeu)
+	n_arena_states = env.sizex*env.sizey - length(env.obstacles)
+	t_max = max_t
+	for x in 1:env.sizex
+		for y in 1:env.sizey
+			if ([x,y] in env.obstacles) == false
+				push!(unvisited_s_states,[x,y])
+			end
+		end
+	end
+	s = deepcopy(s_0)
+	u = deepcopy(u_0)
+	id_s = findfirst(i -> i == [s[1],s[2]],unvisited_s_states)
+	id_u = findfirst(i -> i == u,unvisited_u_states)
+	if id_s != nothing
+	deleteat!(unvisited_s_states,id_s)
+	end
+	if id_u != nothing
+	deleteat!(unvisited_u_states,id_u)
+	end
+	for t in 1:max_t
+		actions,policy = optimal_policy(s,u,opt_value,env,params)
+		idx = rand(Categorical(policy))
+		action = actions[idx]
+		for i in 1:length(actions)
+			if policy[i] > 0.6
+				push!(urgency,u)
+			end
+		end
+		s_p = transition_s(s,action,env)
+		u_p = transition_u(s,u,action,env)
+		s = s_p[1]
+		u = u_p
+		id_s = findfirst(i -> i == [s[1],s[2]],unvisited_s_states)
+		id_u = findfirst(i -> i == u,unvisited_u_states)
+		if id_s != nothing
+			deleteat!(unvisited_s_states,id_s)
+		end
+		if id_u != nothing
+			deleteat!(unvisited_u_states,id_u)
+		end
+		push!(xpositions,[s[1]])
+		push!(ypositions,[s[2]])
+		push!(all_x,s[1])
+		push!(all_y,s[2])
+		push!(u_states,u)
+		if u == 1
+			u = env.sizeu
+			push!(dead_times,t+1)
+		end
+		if occupancies == true
+			if length(unvisited_s_states) == 0
+				return xpositions,ypositions,u_states,all_x,all_y,urgency,1-length(unvisited_s_states)/n_arena_states,1-length(unvisited_u_states)/env.sizeu,t
+			end
+		end
+	end
+	xpositions,ypositions,u_states,all_x,all_y,urgency,1-length(unvisited_s_states)/n_arena_states,1-length(unvisited_u_states)/env.sizeu,t_max,dead_times
+end
 
 # ╔═╡ a4457d71-27dc-4c93-81ff-f21b2dfed41d
 md"### A movie"
@@ -374,7 +536,7 @@ anim = @animate for t in 1:max_t+2
 	#Draw obstacles
 	ptest = scatter(env.obstaclesx,env.obstaclesy,markershape = :square, markersize = 24, color = "black")
 	#Draw food
-	for i in 1:length(reward_mags)
+	for i in 1:length(env.reward_mags)
 		scatter!(ptest,[env.reward_locations[i][1]],[env.reward_locations[i][2]],markersize = reward_sizes[i],color = "green",markershape = :diamond)
 	end
 	plot!(ptest, gridalpha = 0.8,  xticks = collect(0.5:env.sizex+0.5), yticks = collect(0.5:env.sizey+0.5), tickfontcolor = :white, grid = true, ylim=(0.5,env.sizey +0.5), xlim=(0.5,env.sizex +0.5))
@@ -392,6 +554,9 @@ anim = @animate for t in 1:max_t+2
 end
 end
 
+# ╔═╡ a12ae2fc-07d4-459e-8459-747ab12fdbd5
+h_xpos_anim,h_ypos_anim,h_us_anim,h_allx_anim,h_ally_anim,h_urgency_anim = sample_trajectory([3,3],30,h_value,max_t_anim,env1,params)
+
 # ╔═╡ b072360a-6646-4d6d-90ea-716085c53f66
 md"Produce animation? $(@bind movie CheckBox(default = false))"
 
@@ -408,7 +573,7 @@ function reachable_rewards(s,u,a,env::environment;delta_reward = 1)
 end
 
 # ╔═╡ 7a0173ac-240d-4f93-b413-45c6af0f4011
-function q_iteration(env::environment,ϵ,tolerance = 1E-2, n_iter = 100,verbose = false)
+function q_iteration(env::environment,ϵ,pars,tolerance = 1E-2, n_iter = 100,verbose = false)
 	value = zeros(env.sizex,env.sizey,env.sizeu)
 	value_old = deepcopy(value)
 	t_stop = n_iter
@@ -421,10 +586,10 @@ function q_iteration(env::environment,ϵ,tolerance = 1E-2, n_iter = 100,verbose 
 				ids = findall(i -> i == s,env.obstacles)
 				#Only update value for non-obstacle states
 				if length(ids) == 0
-					actions,_ = adm_actions(s,u,env)
+					actions,_ = adm_actions(s,u,env,pars)
 					values = zeros(length(actions))
 					for (id_a,a) in enumerate(actions)
-						s_primes = reachable_states(s,a)
+						s_primes = transition_s(s,a,env)#reachable_states(s,a)
 						r = reachable_rewards(s,u,a,env)
 						for s_prime in s_primes
 							u_prime = transition_u(s,u,a,env)
@@ -457,7 +622,7 @@ end
 
 # ╔═╡ caadeb3b-0938-4559-8122-348c960a6eb1
 #To compute
-q_value,t_stop_q = q_iteration(env1,0.0,0.1,30,true);
+q_value,t_stop_q = q_iteration(env1,0.0,params,0.1,30,true);
 #To read out from file
 #Specific one
 #q_value = reshape(readdlm("values/q_value_gain_$(food_gain)_eps_$(ϵ).dat"),env1.sizex,env1.sizey,env1.sizeu);
@@ -487,18 +652,20 @@ begin
 end
 
 # ╔═╡ 40d62df0-53bb-4b46-91b7-78ffd621a519
-function optimal_policy_q(s,u,value,ϵ,env::environment)
-	actions,ids_actions = adm_actions(s,u,env)
+function optimal_policy_q(s,u,value,ϵ,env::environment,pars)
+	actions,ids_actions = adm_actions(s,u,env,pars)
 	q_values = zeros(length(actions))
 	policy = zeros(length(actions))
 	for (idx,a) in enumerate(actions)
-		s_primes = reachable_states(s,a)
+		#s_primes = reachable_states(s,a)
 		r = reachable_rewards(s,u,a,env)
-		for s_p in s_primes
-			#deterministic environment
+		#for s_p in s_primes
 			u_p = transition_u(s,u,a,env)
+			s_p = transition_s(s,a,env)[1]
+			#deterministic environment
+			#u_p = transition_u(s,u,a,env)
 			q_values[idx] += r + env.γ*value[s_p[1],s_p[2],u_p]
-		end
+		#end
 	end
 	best_actions = findall(i-> i == maximum(q_values),q_values)
 	#ϵ-greedy policy
@@ -515,10 +682,10 @@ function optimal_policy_q(s,u,value,ϵ,env::environment)
 end
 
 # ╔═╡ 005720d3-5920-476b-9f96-39971f512452
-optimal_policy_q([3,3],20,q_value,ϵ,env1)
+optimal_policy_q([3,3],20,q_value,ϵ,env1,params)
 
 # ╔═╡ 2379dcc3-53cb-4fb6-b1e8-c851e36acd1f
-function sample_trajectory_q(s_0,u_0,opt_value,ϵ,max_t,env::environment,occupancies = true)
+function sample_trajectory_q(s_0,u_0,opt_value,ϵ,max_t,env::environment,pars,occupancies = false)
 	xpositions = Any[]
 	ypositions = Any[]
 	u_states = Any[]
@@ -546,13 +713,13 @@ function sample_trajectory_q(s_0,u_0,opt_value,ϵ,max_t,env::environment,occupan
 	deleteat!(unvisited_s_states,id_s)
 	deleteat!(unvisited_u_states,id_u)
 	for t in 1:max_t
-		actions_at_s,policy,n_actions = optimal_policy_q(s,u,opt_value,ϵ,env)
+		actions_at_s,policy,n_actions = optimal_policy_q(s,u,opt_value,ϵ,env,pars)
 		idx = rand(Categorical(policy))
 		action = actions_at_s[idx]
 		#action = rand(actions)
 		s_p = transition_s(s,action,env)
 		u_p = transition_u(s,u,action,env)
-		s = s_p
+		s = s_p[1]
 		u = u_p
 		#If agent dies, terminate episode
 		if u == 1
@@ -621,6 +788,691 @@ anim = @animate for t in 1:max_t+2
 end
 end
 
+# ╔═╡ ba9a241e-93b7-42fd-b790-d6010e2435bd
+md"# Fixed actions"
+
+# ╔═╡ 39b00e87-db6e-441f-8265-de75148d6519
+params_fa = paras(α = 1,constant_actions = true)
+
+# ╔═╡ a6e21529-00eb-40b8-9f40-b8b26171eaad
+h_value_fa,_ = h_iteration(env1,params_fa,tolerance = 0.1,n_iter = 30,verbose =false);
+
+# ╔═╡ c8c70b3f-45d5-4d38-95af-85ae85d1233c
+q_value_fa,_ = q_iteration(env1,0.45,params_fa,0.1,30,false);
+
+# ╔═╡ a14df073-5b27-4bdb-b4c8-03927909b12e
+function KL_iteration(env::environment,params;tolerance = 1E-2, n_iter = 100,verbose = false,fixed_default = false)
+	value = zeros(env.sizex,env.sizey,env.sizeu)
+	value_old = deepcopy(value)
+	t_stop = n_iter
+	f_error = 0
+	for t in 1:n_iter
+		ferror_max = 0
+		Threads.@threads for u in 1:env.sizeu
+			for x in 1:env.sizex, y in 1:env.sizey
+				s = [x,y]
+				ids = findall(i -> i == s,env.obstacles)
+				#Only update value for non-obstacle states
+				if length(ids) == 0
+					actions,_ = adm_actions(s,u,env,params)
+					Z = 0
+					for a in actions
+						s_primes = transition_s(s,a,env)
+						expo = 0
+						for s_prime in s_primes
+							u_prime = transition_u(s,u,a,env)
+							if fixed_default == false
+								expo += -log(length(actions)) + env.γ*value_old[s_prime[1],s_prime[2],u_prime]
+							else
+								expo += -log(9) + env.γ*value_old[s_prime[1],s_prime[2],u_prime]
+							end
+						end
+						Z += exp(expo/params.α)
+					end
+					value[x,y,u] = params.α*log(Z)
+					f_error = abs(value[x,y,u] - value_old[x,y,u])
+					ferror_max = max(ferror_max,f_error)
+				else
+					value[x,y,u] = 0
+				end
+			end
+		end
+		if ferror_max < tolerance
+			t_stop = t
+			break
+		end
+		if verbose == true 
+			println("iteration = ", t, ", max function error = ", ferror_max)
+		end
+		value_old = deepcopy(value)
+	end
+	value,t_stop
+end
+
+# ╔═╡ ad2855ee-ffc3-4910-a307-2e908b93706b
+axs,_ = adm_actions([3,3],50,env1,params_fa)
+
+# ╔═╡ 5b3bbb53-d5f7-462b-8425-c8c6c4ff3865
+length(axs)
+
+# ╔═╡ 828b1bcd-a093-463c-bb2f-4c1b5359939c
+optimal_policy([1,2],4,h_value_fa,env1,params_fa)
+
+# ╔═╡ c7bc355d-d8dd-4b82-ac81-1b9a6d5f71e0
+KL_value_va,_ = KL_iteration(env1,params,tolerance = 0.1,n_iter = 30,verbose =false);
+
+# ╔═╡ af848419-950a-4827-bc4e-fc3e8facd1a8
+KL_value_fa,_ = KL_iteration(env1,params_fa,tolerance = 0.1,n_iter = 30,verbose =false,fixed_default = true);
+
+# ╔═╡ f405c26e-f911-4dea-9364-f751259acf43
+function optimal_policyKL(s,u,optimal_value,env::environment,params;verbose = false,fixed_default = false)
+	actions,_ = adm_actions(s,u,env,params)
+	policy = zeros(length(actions))
+	Z = exp(optimal_value[s[1],s[2],u])
+	#Only compute policy for available actions
+	for (idx,a) in enumerate(actions)
+		u_p = transition_u(s,u,a,env)
+		s_p = transition_s(s,a,env)[1]
+		if fixed_default == false
+			policy[idx] = exp((-log(length(actions))+env.γ*optimal_value[s_p[1],s_p[2],u_p])/params.α-optimal_value[s[1],s[2],u])
+		else
+			policy[idx] = exp((-log(9) + env.γ*optimal_value[s_p[1],s_p[2],u_p])/params.α-optimal_value[s[1],s[2],u])
+		end
+	end
+	#adjust for numerical errors in probability
+	sum_p = sum(policy)
+	if verbose == true
+		println("state = ", s, " u = ", u)
+		println("policy = ", policy)
+		println("sum policy = ", sum(policy))
+	end
+	policy = policy./sum(policy)
+	actions,policy
+end
+
+# ╔═╡ 91826a58-ebd5-4e2f-8836-ad6cff22406e
+optimal_policyKL([1,2],4,KL_value_fa,env1,params_fa,fixed_default = true)
+
+# ╔═╡ cb3280eb-8453-4040-aac0-22c1dc93b9d9
+function create_episode_KL(s_0,u_0,value,max_t,env,pars;fd = false)
+	states = Any[]
+	us = Any[]
+	values = Any[]
+	a_s = Any[]
+	s = deepcopy(s_0)
+	u = deepcopy(u_0)
+	for t in 1:max_t
+		push!(states,s)
+		push!(us,u)
+		if u == 1
+			break
+		end
+		#ids_dstate,discretized_state = discretize_state(state,env)
+		#id_dstate = build_index_b(ids_dstate,env)
+		push!(values,value[s[1],s[2],u])
+		actions, policy= optimal_policyKL(s,u,value,env,pars,fixed_default = true)
+		idx = rand(Categorical(policy))
+		action = actions[idx]
+		#Choosing action randomly according to policy
+		a = action#rand(actions)
+		push!(a_s,a)
+		#For discretized dynamics
+		#_,state_p = transition_b(state,action,env) 
+		#For real dynamics
+		states_p = transition_s(s,a,env)
+		u_prime = transition_u(s,u,a,env)
+		s = deepcopy(states_p[1])
+		u = deepcopy(u_prime)
+	#end
+	end
+	states,us,a_s,values
+end
+
+# ╔═╡ 7431c898-bbef-422e-af13-480d2e912d16
+md"# Empowerment"
+
+# ╔═╡ 86685690-c31d-4b71-b070-43fdb18e48db
+function adm_actions_emp(s_state,u_state,env::environment, constant_actions = false)
+	out = Any[]
+	moving_actions = [[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,1],[-1,-1],[1,-1]]
+	#moving_actions = [[1,0],[0,1],[-1,0],[0,-1]]
+	ids_actions = collect(1:length(moving_actions))
+	#If agent is "alive"
+	if u_state > 1
+		#To check that agent does not start at harmful state
+		#if transition_u(s_state,u_state,[0,0],env) != 1
+			out = deepcopy(moving_actions)
+			#When we constrain by hand the amount of actions
+			#we delete some possible actions
+			if constant_actions == false
+				#Give all possible actions by default
+				#Check the boundaries of gridworld
+				for it in 1:2
+				not_admissible = in(env.xborders).(s_state[1]+(-1)^it)
+					if not_admissible == true
+						ids = findall(idx -> idx[1] == (-1)^it,out)
+						deleteat!(out,ids)
+						deleteat!(ids_actions,ids)
+					end
+				end
+				for it in 1:2
+				not_admissible = in(env.yborders).(s_state[2]+(-1)^it)
+					if not_admissible == true
+						ids = findall(idx -> idx[2] == (-1)^it,out)
+						deleteat!(out,ids)
+						deleteat!(ids_actions,ids)
+					end
+				end
+				#Check for obstacles
+				for action in moving_actions
+					idx = findall(i -> i == s_state+action,env.obstacles)
+					if length(idx) > 0
+						idx2 = findfirst(y -> y == action,out)
+						deleteat!(out,idx2)
+						deleteat!(ids_actions,idx2)
+					end
+				end
+			#end
+		end
+	else
+		ids_actions = Any[]
+	end
+	#Doing nothing is always an admissible action
+	push!(out,[0,0])
+	push!(ids_actions,length(ids_actions)+1)
+	out,ids_actions
+	#Checking if having all actions at every state changes results
+	#return [[1,0],[0,1],[-1,0],[0,-1],[0,0]],[1,2,3,4,5]
+end
+
+# ╔═╡ f2f45f6f-c973-4272-afa2-7077dd169790
+@with_kw struct pars_emp
+	n_fixed = 1 #fixing the action for n_fixed simulation steps
+	n = 3 #n in n-step empowerment
+	tol = 1E-12
+	max_iter = 150
+	constant_actions = false
+end
+
+# ╔═╡ 0de63f0b-c545-445b-a0da-97ec75647598
+p_emp = pars_emp(n = 5)
+
+# ╔═╡ c555b1ac-ed4f-4767-9680-0e7ef7ab758f
+begin
+	size_x_emp = 11
+	size_y_emp = 11
+	capacity_emp = 100
+	food_gain_emp = 10
+	reward_locations_emp = [[1,1],[size_x_emp,size_y_emp],[size_x_emp,1],[1,size_y_emp]]
+	reward_mags_emp = [1,1,1,1].*food_gain_emp
+	env_emp = initialize_fourrooms(size_x_emp,size_y_emp,capacity_emp,reward_locations_emp,reward_mags_emp)
+	#env_emp = env1
+	#one small room
+	#obstacles = [[1,4],[2,4],[3,4],[4,3],[4,2],[4,1]]
+	#Rewards for the walled environment
+	#reward_locations = [[1,6],[3,2],[4,2],[5,2],[6,2]]
+	#reward_mags = [30,-40,-30,-20,-10]
+end
+
+# ╔═╡ 33df863c-bf8c-4624-9fd3-1d3a569a4f61
+function transition_s_emp(s,u,a,env)
+	s_prime = [1,1]
+	if u > 1
+		s_prime = s + a
+		if in(env.obstacles).([s_prime]) == [true]
+			s_prime = s
+		else
+			if s_prime[1] == env.xborders[1] || s_prime[1] == env.xborders[2] || s_prime[2] == env.yborders[1] || s_prime[2] == env.yborders[2]
+				s_prime = s
+			end
+		end
+	end
+	s_prime
+end
+
+# ╔═╡ 01aaed4b-e028-49c9-90b4-a6c4158929f1
+function n_step_transition(s,u,n_action,env,pars_emp)
+	s_temp = deepcopy(s)
+	u_temp = deepcopy(u)
+	for a in n_action #n-step action
+		for t in 1:pars_emp.n_fixed #fix each action for n_fixed simulation steps
+			u_p = transition_u(s_temp,u_temp,a,env)
+			s_p = transition_s_emp(s_temp,u_p,a,env)
+			s_temp = deepcopy(s_p)
+			u_temp = deepcopy(u_p)
+		end
+	end
+	s_temp,u_temp
+end
+
+# ╔═╡ 49df9fba-22a8-48e9-8278-22ffdfc7765f
+s_p = n_step_transition([1,1],1,[[-1,1],[0,0]],env1,p_emp)
+
+# ╔═╡ 3dd47db4-2485-4833-8172-3fe7a3fe2214
+i_p = build_index(s_p[1],s_p[2],env1)
+
+# ╔═╡ e4dcc71c-4cc6-4b8f-88ad-7c2c18e5af02
+function empowerment(s_state,u_state,env,pars_emp)
+	actions,_ = adm_actions_emp(s_state,u_state,env,pars_emp.constant_actions)
+	n_step_actions = Iterators.product([actions for i in 1:pars_emp.n]...)
+	N_n = length(actions)^pars_emp.n
+	p_a = ones(N_n)*(1/N_n) #Initialize uniformly random prob of n-step actions
+	#Create actions - states matrix
+	n_s = env.sizex*env.sizey*env.sizeu
+	P_a_s_big = zeros(N_n,n_s) #deterministic world, at most N_n distinct states
+	#build matrix of n_actions to states
+	for (ν,a) in enumerate(n_step_actions)
+		s_p,u_p = n_step_transition(s_state,u_state,a,env,pars_emp)
+		i_p = build_index(s_p,u_p,env)
+		P_a_s_big[ν,i_p] = 1
+	end
+	#Keep a lower dimensional matrix, of only reachable states
+	test = Any[]
+	for i in 1:env_emp.sizex*env_emp.sizey*env_emp.sizeu
+		if sum(P_a_s_big[:,i]) > 0
+			push!(test,P_a_s_big[:, i])
+		end
+	end
+	P_a_s = hcat(test...)
+	#@show size(P_a_s)
+	#Blahut-Arimoto algorithm
+	c_old = 0
+	q = zeros(N_n,n_s)
+	for k in 1:pars_emp.max_iter
+		c_new = 0
+		p_k = zeros(N_n)
+		q = p_a.*P_a_s
+		q = q./sum(q, dims = 1)
+		p_k = prod(q.^P_a_s, dims = 2)
+		p_k = p_k/sum(p_k)
+		# for (ν,a) in enumerate(n_step_actions)
+		# 	if p_k[ν] > 0
+		# 		c_new += sum(p_k[ν].*P_a_s[ν,:].*log.(q[ν,:]./p_k[ν] .+ 1E-16))
+		# 	end
+		# end
+		#@show c_new,c_old
+		if norm(p_k - p_a) < pars_emp.tol
+		#if abs(c_new - c_old) < pars_emp.tol && k > 1
+			#println("Converged at iteration $(k)")
+			break
+		end
+		p_a = deepcopy(p_k)
+		c_old = deepcopy(c_new)
+	end
+	#@show q
+	for (ν,a) in enumerate(n_step_actions)
+		if p_a[ν] > 0
+			c_old += sum(p_a[ν].*P_a_s[ν,:].*log.(q[ν,:]./p_a[ν] .+ 1E-16))
+		end
+	end
+	c_old, p_a
+end
+
+# ╔═╡ 4121c28e-010e-428a-8e9a-544231dc6c0b
+empowerment([3,5],30,env_emp,p_emp)
+
+# ╔═╡ 1c5176b2-f7e0-4a9a-b07c-392840294aa0
+empowerment([2,2],30,env_emp,p_emp)
+
+# ╔═╡ e2da5d6b-4134-4bee-a93b-a153d19359cf
+function emp_episode(s_0,u_0,env,pars_emp;n_steps = 10)
+	s = deepcopy(s_0)
+	u = deepcopy(u_0)
+	states_out = Any[]
+	us_out = Any[]
+	actions_out = Any[]
+	empowerments_out = Any[]
+	push!(states_out,s)
+	push!(us_out,u)
+	for t in 1:n_steps
+		actions,_ = adm_actions(s,u,env,pars_emp)
+		#n_step_actions = Iterators.product([actions for i in 1:pars_emp.n]...)
+		#N_n = length(actions)^pars_emp.n
+		#emps = zeros(N_n)
+		emps = zeros(length(actions))
+		#for every 1-step action, compute n-step empowerment of every successor state
+		Threads.@threads for ν in 1:length(actions)
+			u_p = transition_u(s,u,actions[ν],env)
+			s_p = transition_s_emp(s,u_p,actions[ν],env)
+			emps[ν],_ = empowerment(s_p,u_p,env,pars_emp)
+		end
+		emps = round.(emps,digits = 12)
+		#take 1-step action that greedily maximizes n-step empowerment
+		best_actions = findall(i-> i == maximum(emps),emps)
+		#e_max,ν_max = findmax(emps)
+		ν_max = rand(best_actions)
+		@show t, actions, emps, best_actions
+		a_max = actions[ν_max]
+		e_max = emps[ν_max]
+		u_p = transition_u(s,u,a_max,env)
+		s_p = transition_s_emp(s,u_p,a_max,env)
+		push!(actions_out,a_max)
+		push!(empowerments_out, e_max)
+		push!(states_out,s_p)
+		push!(us_out,u)
+		if u_p < 2
+			break
+		end
+		s = deepcopy(s_p)
+		u = deepcopy(u_p)
+	end
+	states_out,us_out,actions_out,empowerments_out
+end
+
+# ╔═╡ e46e0035-c649-485f-9e87-6f7231c0927a
+# states_emp,us_emp, actions_emp,emp_emp = emp_episode([3,6],50,env_emp,p_emp,n_steps = 200)
+
+# ╔═╡ b1737188-4e57-4d81-a1fa-b55e1621a7dc
+# begin
+# 	writedlm("empowerment/11x11_states_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",[[states_emp[i],us_emp[i]] for i in 1:length(states_emp)])
+# 	writedlm("empowerment/11x11_actions_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",actions_emp)
+# 	writedlm("empowerment/11x11_empowerments_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",emp_emp)
+# end
+
+# ╔═╡ 73b6c6e3-0c3c-46d5-a109-1f512b6871ee
+states_emp_read = readdlm("empowerment/11x11_states_$(p_emp.n)_step_time_201_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat")
+
+# ╔═╡ 8ec4f121-410a-49c6-8ae5-f8e014757fc7
+begin
+	states_emp = [[parse(Int,states_emp_read[i,1][2]),parse(Int,states_emp_read[i,1][2])] for i in 1:length(states_emp_read[:,1])]
+	us_emp = [states_emp_read[i,3] for i in 1:length(states_emp_read[:,1])]
+end
+
+# ╔═╡ 0a693ea2-9506-4217-86d7-514678c03104
+anim_emp = animation([[states_emp[i][1]] for i in 1:length(states_emp)],[[states_emp[i][2]] for i in 1:length(states_emp)],us_emp,length(states_emp),env_emp,color = palette(:default)[1],title = "$(p_emp.n)-step empowerment")
+
+# ╔═╡ 118e6de3-b525-42e5-8c0c-654c525a4684
+gif(anim_emp, fps = 10, "grid_world_11x11_emp_n_$(p_emp.n)_t_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).gif")
+
+# ╔═╡ 3014c91c-b705-42e1-9689-ebb1c357f8b2
+md"# Sophisticated active inference"
+
+# ╔═╡ 49124160-32b0-4e09-904c-9547697cbfd1
+begin
+	size_x_AIF = 11
+	size_y_AIF = 11
+	capacity_AIF = 100
+	food_gain_AIF = 10
+	reward_locations_AIF = [[1,1],[size_x_AIF,size_y_AIF],[size_x_AIF,1],[1,size_y_emp]]
+	reward_mags_AIF = [1,1,1,1].*food_gain_AIF
+	env_AIF = initialize_fourrooms(size_x_AIF,size_y_AIF,capacity_AIF,reward_locations_AIF,reward_mags_AIF)
+	#env_emp = env1
+	#one small room
+	#obstacles = [[1,4],[2,4],[3,4],[4,3],[4,2],[4,1]]
+	#Rewards for the walled environment
+	#reward_locations = [[1,6],[3,2],[4,2],[5,2],[6,2]]
+	#reward_mags = [30,-40,-30,-20,-10]
+end
+
+# ╔═╡ 521717ad-23b7-4bca-bc8d-a2387946e55d
+@with_kw struct pars_AIF
+	H = 10
+	δ = 0.2
+	#Reward maximizing temperature
+	β = 1
+	constant_actions = false
+end
+
+# ╔═╡ d99990c1-1b0c-4d52-87a3-6b3bd363fde7
+
+
+# ╔═╡ 00025055-7ec0-486d-bb29-8e769e08fcc8
+function AIF_iteration(env, pars)
+	value = zeros(env.sizex,env.sizey,env.sizeu)
+	value_old = deepcopy(value)
+	for t in pars.H-1:-1:1
+		#Parallelization over states
+		Threads.@threads for u in 1:env.sizeu
+			for x in 1:env.sizex, y in 1:env.sizey
+				s = [x,y]
+				ids = findall(i -> i == s,env.obstacles)
+				#Only update value for non-obstacle states
+				if length(ids) == 0
+					actions,_ = adm_actions(s,u,env,pars)
+					Q = zeros(length(actions))
+					for (id_a,a) in enumerate(actions)
+						#For every action, look at reachable states
+						#s_primes_ids,states_p = reachable_states_b(state,a,env)
+						s_primes = transition_s(s,a,env)
+						for (idx,s_p) in enumerate(s_primes)
+							u_prime = transition_u(s,u,a,env)
+							#if at the end of the horizon
+							if t == pars.H -1
+								if u_prime == 1
+									Q[id_a] -= 1
+								else 
+									Q[id_a] += pars.β*(reachable_rewards(s,u,a,env) + 1) # βR(s) + c(β)
+									#Q[id_a] += pars.δ
+								end
+							else
+								if u_prime == 1
+									Q[id_a] -= 1
+								else
+									Q[id_a] += pars.β*(reachable_rewards(s,u,a,env) + 1) + value_old[s_p[1],s_p[2],u_prime]
+									#Q[id_a] += pars.δ + value_old[s_p[1],s_p[2],u_prime]
+								end
+							end
+						end
+					end
+					value[x,y,u],i_opt = findmax(Q)
+				else
+					value[x,y,u] = 0
+				end
+				
+				#a_opt = actions[i_opt]
+			end
+		end
+		value_old = deepcopy(value)
+	end
+	value
+end
+
+# ╔═╡ b7c66258-bb37-4660-9b22-783a50d4c6f8
+function optimal_policy_AIF(s,u,value,env,pars)
+	#Check admissible actions
+	actions,ids_actions = adm_actions(s,u,env,pars)
+	policy = zeros(length(actions))
+	Q = zeros(length(actions))
+	for (id_a,a) in enumerate(actions)
+		#For every action, look at reachable states
+		#s_primes_ids,states_p = reachable_states_b(state,a,env)
+		states_p =  transition_s(s,a,env)
+		for (idx,s_p) in enumerate(states_p)
+			u_prime = transition_u(s,u,a,env)
+			if u_prime == 1
+				Q[id_a] += 0
+			else
+				Q[id_a] += pars.β*(reachable_rewards(s,u,a,env) + 1) + value[s_p[1],s_p[2],u_prime]
+				#Q[id_a] += pars.δ + value[s_p[1],s_p[2],u_prime]
+			end
+		end
+	end
+	#computer precision
+	#best_actions = findall(i-> i == maximum(round.(Q,digits = 16)),round.(Q,digits = 16))
+	best_actions = findall(i-> i == maximum(Q),Q)
+	actions[best_actions]
+end
+
+# ╔═╡ 4f6cdf92-0821-4d39-ae15-1844a4a29482
+function create_episode_AIF(s_0,u_0,value,max_t,env,pars)
+	states = Any[]
+	us = Any[]
+	values = Any[]
+	a_s = Any[]
+	s = deepcopy(s_0)
+	u = deepcopy(u_0)
+	for t in 1:max_t
+		push!(states,s)
+		push!(us,u)
+		if u == 1
+			break
+		end
+		#ids_dstate,discretized_state = discretize_state(state,env)
+		#id_dstate = build_index_b(ids_dstate,env)
+		push!(values,value[s[1],s[2],u])
+		actions = optimal_policy_AIF(s,u,value,env,pars)
+		#Choosing action randomly according to policy
+		a = rand(actions)
+		push!(a_s,a)
+		#For discretized dynamics
+		#_,state_p = transition_b(state,action,env) 
+		#For real dynamics
+		states_p = transition_s(s,a,env)
+		u_prime = transition_u(s,u,a,env)
+		s = deepcopy(states_p[1])
+		u = deepcopy(u_prime)
+	#end
+	end
+	states,us,a_s,values
+end
+
+# ╔═╡ 6edeefb3-186c-447a-b6e6-abab6a7d1c63
+p_AIF = pars_AIF(H = 200,δ = 0.1,β = 0.1)
+
+# ╔═╡ 317fab4f-c0b0-4671-a653-1bc8cbbfabc4
+horizons = [20,30,50,100,200,500,1000]
+
+# ╔═╡ 29193a6f-737f-4efb-acaa-d16d2b8c3589
+βs_sAIF = [0.1]
+
+# ╔═╡ 0137a63c-6beb-4aaa-a485-f4b5e08fab01
+# begin
+# 	# for h in horizons
+# 	h = 200
+# 	for β in βs_sAIF
+# 		p_AIFt = pars_AIF(H = h,δ = 0.1,β = β)
+# 		v_AIF = AIF_iteration(env_AIF,p_AIFt);
+# 		writedlm("AIF/values/rew_beta_$(p_AIFt.β)_horizon_$(h).dat",v_AIF)
+# 	end
+# end
+
+# ╔═╡ 210ef48a-13b1-44b5-a4c6-c2084bafc778
+begin
+	v_AIF = readdlm("AIF/values/rew_beta_$(p_AIF.β)_horizon_$(p_AIF.H).dat")
+	v_AIF = reshape(v_AIF,env_AIF.sizex,env_AIF.sizey,env_AIF.sizeu)
+end
+
+# ╔═╡ 38d916de-9068-4f37-9ace-81e115d731bc
+states_AIF_anim,us_AIF_anim,actions_AIF_anim,values_AIF_anim = create_episode_AIF([3,3],30,v_AIF,max_t_anim,env_AIF,p_AIF)
+
+# ╔═╡ 6046a1ae-ec46-490c-baa7-1534f72c5ea9
+anim_AIF = animation([[states_AIF_anim[i][1]] for i in 1:length(states_AIF_anim)],[[states_AIF_anim[i][2]] for i in 1:length(states_AIF_anim)],us_AIF_anim,length(states_AIF_anim),env_AIF,color = palette(:default)[1],title = "H = $(p_AIF.H) EFE agent, \$\\beta = $(p_AIF.β)\$")
+
+# ╔═╡ 9ec3d452-5cc0-447d-8965-9b487f39650a
+gif(anim_AIF, fps = 10, "AIF/rew_beta_$(p_AIF.β)_h_$(p_AIF.H).gif")
+
+# ╔═╡ 51432185-5447-45a5-8734-f85ad54b5602
+function animation3(x_pos1,y_pos1,us1,x_pos2,y_pos2,us2,x_pos3,y_pos3,us3,max_t,env::environment;titles = ["MOP", "Energy","5-step MPOW", "Energy","H = 200, \$\\lambda\$ = 0.1 EFE", "Energy"])
+anim = @animate for t in 1:max_t+2
+	reward_sizes = env.reward_mags
+	#Draw obstacles
+	ptest = scatter(env.obstaclesx,env.obstaclesy,markershape = :square, markersize = 18, color = "black")
+	ptest3 = scatter(env.obstaclesx,env.obstaclesy,markershape = :square, markersize = 18, color = "black")
+	ptest5 = scatter(env.obstaclesx,env.obstaclesy,markershape = :square, markersize = 18, color = "black")
+	#Draw food
+	for i in 1:length(reward_mags)
+		scatter!(ptest,[env.reward_locations[i][1]],[env.reward_locations[i][2]],markersize = reward_sizes[i],color = "green",markershape = :diamond)
+		scatter!(ptest3,[env.reward_locations[i][1]],[env.reward_locations[i][2]],markersize = reward_sizes[i],color = "green",markershape = :diamond)
+		scatter!(ptest5,[env.reward_locations[i][1]],[env.reward_locations[i][2]],markersize = reward_sizes[i],color = "green",markershape = :diamond)
+	end
+	plot!(ptest, gridalpha = 0.8,  xticks = collect(0.5:env.sizex+0.5), yticks = collect(0.5:env.sizey+0.5), tickfontcolor = :white, grid = true, ylim=(0.5,env.sizey +0.5), xlim=(0.5,env.sizex +0.5))
+	plot!(ptest3, gridalpha = 0.8,  xticks = collect(0.5:env.sizex+0.5), yticks = collect(0.5:env.sizey+0.5), tickfontcolor = :white, grid = true, ylim=(0.5,env.sizey +0.5), xlim=(0.5,env.sizex +0.5))
+	plot!(ptest5, gridalpha = 0.8,  xticks = collect(0.5:env.sizex+0.5), yticks = collect(0.5:env.sizey+0.5), tickfontcolor = :white, grid = true, ylim=(0.5,env.sizey +0.5), xlim=(0.5,env.sizex +0.5))
+	ptest2 = plot(xticks = false,ylim = (0,env.sizeu), grid = false,legend = false)
+	ptest4 = plot(xticks = false,ylim = (0,env.sizeu), grid = false,legend = false)
+	ptest6 = plot(xticks = false,ylim = (0,env.sizeu), grid = false,legend = false)
+	if t <= max_t
+		scatter!(ptest, x_pos1[t],y_pos1[t], markersize = 15, leg = false, color = "gray",markershape = :utriangle)
+		scatter!(ptest3, x_pos2[t],y_pos2[t], markersize = 15, leg = false, color = "gray",markershape = :utriangle)
+		scatter!(ptest5, x_pos3[t],y_pos3[t], markersize = 15, leg = false, color = "gray",markershape = :utriangle)
+		bar!(ptest2, [us1[t]], color = palette(:default)[1])
+		bar!(ptest4, [us2[t]], color = palette(:default)[2])
+		bar!(ptest6, [us3[t]], color = palette(:default)[3])
+		if us1[t] == 1
+			scatter!(ptest,x_pos1[t],y_pos1[t],markersize = 30,markershape = :xcross,color = "black")
+		end
+		if us2[t] == 1
+			scatter!(ptest3,x_pos2[t],y_pos2[t],markersize = 30,markershape = :xcross,color = "black")
+		end
+		if us3[t] == 1
+			scatter!(ptest5,x_pos3[t],y_pos3[t],markersize = 30,markershape = :xcross,color = "black")
+		end
+	else 
+		scatter!(ptest,[(env.sizex+1)/2],[(env.sizey+1)/2],markersize = 100,markershape = :square, color = "gray",leg = false)
+		scatter!(ptest3,[(env.sizex+1)/2],[(env.sizey+1)/2],markersize = 100,markershape = :square, color = "gray",leg = false)
+		scatter!(ptest5,[(env.sizex+1)/2],[(env.sizey+1)/2],markersize = 100,markershape = :square, color = "gray",leg = false)
+	end
+	plot(ptest,ptest2,ptest3,ptest4,ptest5,ptest6,layout = Plots.grid(1, 6, widths=[0.3,0.03,0.3,0.03,0.3,0.03]),margin = 4Plots.mm, title=[titles[1] titles[2] titles[3] titles[4] titles[5] titles[6]], size = (1800,450))
+end
+end
+
+# ╔═╡ 48ade83b-bd73-4570-9a14-590f6f846097
+anim3 = animation3(h_xpos_anim,h_ypos_anim,h_us_anim,[[states_emp[i][1]] for i in 1:length(states_emp)],[[states_emp[i][2]] for i in 1:length(states_emp)],us_emp,[[states_AIF_anim[i][1]] for i in 1:length(states_AIF_anim)],[[states_AIF_anim[i][2]] for i in 1:length(states_AIF_anim)],us_AIF_anim,200,env1)
+
+# ╔═╡ d51573c2-f8b8-4785-bc14-3f611a34a924
+us_emp
+
+# ╔═╡ c515caee-858d-4e1f-b021-7dd5b8648549
+gif(anim3,fps = 10,"MOP_MPOW_EFE.gif")
+
+# ╔═╡ df4ce514-884c-401a-85f3-02ec37444816
+md"## Long episode analysis"
+
+# ╔═╡ 446c2897-8db9-452d-9d11-4cf7cc9bfa8a
+num_episodes_AIF = 1000
+
+# ╔═╡ 89c24ce1-87ce-4145-b3e7-bc6da50b94bf
+max_time_AIF = 10000
+
+# ╔═╡ 8dcb6536-3737-4d58-862e-094218874040
+env_AIF
+
+# ╔═╡ 4d96f296-b22a-4243-b32e-7154d88a16d7
+β_survivals = 0.1
+
+# ╔═╡ a8152784-c97f-4937-8791-166a411eee80
+# begin
+# 	survival_pcts_AIF = zeros(length(horizons),num_episodes_AIF)
+# 	entropies_AIF = zeros(length(horizons),num_episodes_AIF)
+# 	bins = (collect(1:env_AIF.sizex),collect(1:env_AIF.sizey),collect(1:env_AIF.sizeu))
+# 	for (i,h) in enumerate(horizons)
+# 		for j in 1:num_episodes_AIF
+# 			p_AIFt = pars_AIF(H = h,δ = 0.1,β = β_survivals)
+# 			val_h = readdlm("AIF/values/horizon_$(h).dat")
+# 			val_h = reshape(val_h,env_AIF.sizex,env_AIF.sizey,env_AIF.sizeu)
+# 			states_AIF,us_AIF,actions_AIF,values_AIF = create_episode_AIF(s_0,50,val_h,max_time_AIF,env_AIF,p_AIFt)
+# 			h_AIF = fit(Histogram, ([states_AIF[i][1] for i in 1:length(states_AIF)],[states_AIF[i][2] for i in 1:length(states_AIF)],us_AIF), bins)
+# 			h_AIF_n = normalize(h_AIF,mode =:probability)
+# 			entropies_AIF[i,j] = entropy(h_AIF_n.weights)
+# 			survival_pcts_AIF[i,j] = length(states_AIF)
+# 		end
+# 	end
+# end
+
+# ╔═╡ e9b5ab32-0899-4e3d-b1cb-c986ae82b12d
+# begin
+# 	writedlm("AIF/survivals/suvival_pcts_rew_beta_$(β_survivals)_horizons_$(horizons).dat",survival_pcts_AIF)
+# 	writedlm("AIF/survivals/entropies_rew_beta_$(β_survivals)_horizons_$(horizons).dat",entropies_AIF)
+# end
+
+# ╔═╡ b8ce5e63-5f88-424f-8d78-0910b0f88762
+begin
+	survival_pcts_AIF = readdlm("AIF/survivals/suvival_pcts_rew_beta_$(β_survivals)_horizons_$(horizons).dat")
+	entropies_AIF = readdlm("AIF/survivals/entropies_rew_beta_$(β_survivals)_horizons_$(horizons).dat")
+end
+
+# ╔═╡ a12232f3-0c6b-44c2-bcba-f150a1f39c88
+entropies_AIF
+
+# ╔═╡ b92cde2a-bc29-4417-8a88-0f527a1b790e
+begin
+	plot(xlabel = "Horizon",ylabel = "Lifetime (steps)")
+		plot!(horizons, mean(survival_pcts_AIF,dims = 2),yerror = std(survival_pcts_AIF,dims = 2)./(sqrt(length(survival_pcts_AIF[1,:]))),markerstrokewidth = 2, linewidth = 2.5,label = "AIF agent")
+	#plot!(horizons, mean(survival_H).*ones(length(horizons_j)),label = "MOP agent")
+	plot!(legend_position = :topright)
+	#savefig("AIF/lifetimes_AIF.pdf")
+end
+
 # ╔═╡ d801413b-adff-48f0-aa90-89a1af1c0d63
 md"# MaxEnt RL agent"
 
@@ -638,11 +1490,11 @@ function maxent_iteration(env::environment,params;temp = 1,tolerance = 1E-2, n_i
 				ids = findall(i -> i == s,env.obstacles)
 				#Only update value for non-obstacle states
 				if length(ids) == 0
-					actions,_ = adm_actions(s,u,env)
+					actions,_ = adm_actions(s,u,env,params)
 					Z = 0
 					for a in actions
 						reward = reachable_rewards(s,u,a,env)
-						s_primes = reachable_states(s,a)
+						s_primes = transition_s(s,a,env)#reachable_states(s,a)
 						exponent = 0
 						for s_prime in s_primes
 							u_prime = transition_u(s,u,a,env)
@@ -674,141 +1526,6 @@ end
 # ╔═╡ 93980ec8-f9d2-4637-945c-259715e3ef5d
 maxent_value, t_maxent = maxent_iteration(env1,params,tolerance = 0.1,n_iter = 50,verbose = true);
 
-# ╔═╡ a6fbddc0-7def-489e-9ad1-2e6a5e68eddd
-function optimal_policy(s,u,optimal_value,env::environment,params;verbose = false)
-	actions,_ = adm_actions(s,u,env)
-	policy = zeros(length(actions))
-	Z = exp(optimal_value[s[1],s[2],u])
-	#Only compute policy for available actions
-	for (idx,a) in enumerate(actions)
-		u_p = transition_u(s,u,a,env)
-		s_p = transition_s(s,a,env)
-		policy[idx] = exp(env.γ*optimal_value[s_p[1],s_p[2],u_p]/params.α-optimal_value[s[1],s[2],u])
-	end
-	#adjust for numerical errors in probability
-	sum_p = sum(policy)
-	if verbose == true
-		println("state = ", s, " u = ", u)
-		println("policy = ", policy)
-		println("sum policy = ", sum(policy))
-	end
-	policy = policy./sum(policy)
-	actions,policy
-end
-
-# ╔═╡ 73722c01-adee-4bfd-97b4-60f2ced23725
-function plot_optimal_policy(p,u,opt_value,env::environment,constant_actions = false)
-	for x in 1:env.sizex
-		for y in 1:env.sizey 
-			ids = findall(i -> i == [x,y],env.obstacles)
-			if length(ids) == 0
-				actions,probs = optimal_policy([x,y],u,opt_value,env,params,verbose = false)
-				arrow_x = zeros(length(actions))
-				arrow_y = zeros(length(actions))
-				aux = actions.*probs
-				for i in 1:length(aux)
-					arrow_x[i] = aux[i][1]*1.5
-					arrow_y[i] = aux[i][2]*1.5
-				end
-				quiver!(p,ones(Int64,length(aux))*x,ones(Int64,length(aux))*y,quiver = (arrow_x,arrow_y),color = "green",linewidth = 2)
-				scatter!(p,ones(Int64,length(aux))*x + arrow_x, ones(Int64,length(aux))*y + arrow_y,markersize = probs*30, color = "red")
-			end
-		end
-	end
-end		
-
-# ╔═╡ 76f506dc-b21d-4e13-a8e8-9d1b3bd21b30
-begin
-	p1 = heatmap(transpose(h_value[:,:,u]), title = "optimal value function, u = $u",clims = (minimum(h_value[1,:,u]),maximum(h_value[1,:,u])))
-	for i in 1:length(env1.reward_mags)
-		if reward_mags[i]  > 0
-			col = "green"
-		else
-			col = "gray"
-		end
-		scatter!(p1,[env1.reward_locations[i][1]],[env1.reward_locations[i][2]], color = col, markersize = min(abs(env1.reward_mags[i]),50))
-	end
-	plot!(p1,size = (1000,800)) 
-	plot_optimal_policy(p1,u,h_value,env_c)
-	#p2 = heatmap(val_stoch[:,:,u], title = "value function random walk")
-	plot(p1,legend = false)
-	#savefig("optimal_value_function.png")
-end
-
-# ╔═╡ ef9e78e2-d61f-4940-9e62-40c6d060353b
-function sample_trajectory(s_0,u_0,opt_value,max_t,env::environment,params,occupancies = false)
-	xpositions = Any[]
-	ypositions = Any[]
-	u_states = Any[]
-	all_x = Any[]
-	all_y = Any[]
-	urgency = Any[]
-	dead_times = Any[]
-	push!(xpositions,[s_0[1]])
-	push!(ypositions,[s_0[2]])
-	push!(all_x,s_0[1])
-	push!(all_y,s_0[2])
-	push!(u_states,u_0)
-	unvisited_s_states = Any[]
-	unvisited_u_states = collect(1:env.sizeu)
-	n_arena_states = env.sizex*env.sizey - length(env.obstacles)
-	t_max = max_t
-	for x in 1:env.sizex
-		for y in 1:env.sizey
-			if ([x,y] in env.obstacles) == false
-				push!(unvisited_s_states,[x,y])
-			end
-		end
-	end
-	s = deepcopy(s_0)
-	u = deepcopy(u_0)
-	id_s = findfirst(i -> i == [s[1],s[2]],unvisited_s_states)
-	id_u = findfirst(i -> i == u,unvisited_u_states)
-	if id_s != nothing
-	deleteat!(unvisited_s_states,id_s)
-	end
-	if id_u != nothing
-	deleteat!(unvisited_u_states,id_u)
-	end
-	for t in 1:max_t
-		actions,policy = optimal_policy(s,u,opt_value,env,params)
-		idx = rand(Categorical(policy))
-		action = actions[idx]
-		for i in 1:length(actions)
-			if policy[i] > 0.6
-				push!(urgency,u)
-			end
-		end
-		s_p = transition_s(s,action,env)
-		u_p = transition_u(s,u,action,env)
-		s = s_p
-		u = u_p
-		id_s = findfirst(i -> i == [s[1],s[2]],unvisited_s_states)
-		id_u = findfirst(i -> i == u,unvisited_u_states)
-		if id_s != nothing
-			deleteat!(unvisited_s_states,id_s)
-		end
-		if id_u != nothing
-			deleteat!(unvisited_u_states,id_u)
-		end
-		push!(xpositions,[s[1]])
-		push!(ypositions,[s[2]])
-		push!(all_x,s[1])
-		push!(all_y,s[2])
-		push!(u_states,u)
-		if u == 1
-			u = env.sizeu
-			push!(dead_times,t+1)
-		end
-		if occupancies == true
-			if length(unvisited_s_states) == 0
-				return xpositions,ypositions,u_states,all_x,all_y,urgency,1-length(unvisited_s_states)/n_arena_states,1-length(unvisited_u_states)/env.sizeu,t
-			end
-		end
-	end
-	xpositions,ypositions,u_states,all_x,all_y,urgency,1-length(unvisited_s_states)/n_arena_states,1-length(unvisited_u_states)/env.sizeu,t_max,dead_times
-end
-
 # ╔═╡ 0fdb6f27-479b-4b46-bea2-2b6158f3d1c7
 md"# Toy problem"
 
@@ -818,6 +1535,7 @@ toy_arena = environment(γ = 0.9,sizex = 3,sizey = 1,sizeu = 1,xborders = [0,4],
 # ╔═╡ df146a19-b47b-49eb-993a-7233df3741aa
 @with_kw struct params_toy
 	ϵ = 0.1
+	constant_actions = false
 end
 
 # ╔═╡ d30c86b5-61eb-4e79-a485-f0246cae4064
@@ -842,7 +1560,7 @@ function h_iteration_toy(env::environment,pars_toy;tolerance = 1E-2, n_iter = 10
 		ferror_max = 0
 			for x in 1:env.sizex, y in 1:env.sizey
 				s = [x,y]
-				actions,_ = adm_actions(s,2,env)
+				actions,_ = adm_actions(s,2,env,pars_toy)
 				Z = 0
 				for a in actions
 					s_primes,probs = reachable_states_toy(s,a,pars_toy)
@@ -873,7 +1591,7 @@ val_toy,_ = h_iteration_toy(toy_arena,pars_toy)
 
 # ╔═╡ 0f656395-ffc7-4010-abb9-04b43121bcfb
 function optimal_policy_toy(s,optimal_value,env::environment,pars_toy;verbose = false)
-	actions,_ = adm_actions(s,2,env)
+	actions,_ = adm_actions(s,2,env,pars_toy)
 	policy = zeros(length(actions))
 	Z = exp(optimal_value[s[1],s[2]])
 	#Only compute policy for available actions
@@ -1047,7 +1765,7 @@ begin
 end
 
 # ╔═╡ d2df50cb-d163-4c49-b940-35179b7148a5
-pars_tv = paras(β = 0.3,γ = 0.999,η = 1)
+pars_tv = paras(β = 0.3,γ = 0.999,η = 1,constant_actions = false)
 
 # ╔═╡ ffd1a342-c46e-4016-a24b-fc98e4498890
 begin
@@ -1086,7 +1804,7 @@ end
 
 # ╔═╡ a134c7d5-15e6-4a22-bc34-56a3155b88dd
 function optimal_policy_tv(s,u,optimal_value,env::environment,params;verbose = false)
-	actions,_ = adm_actions(s,u,env)
+	actions,_ = adm_actions(s,u,env,params)
 	policy = zeros(length(actions))
 	#Z = exp(optimal_value[s[1],s[2],u])
 	#Only compute policy for available actions
@@ -1248,7 +1966,7 @@ end
 md"# Random walker"
 
 # ╔═╡ 6b3fb79f-be03-4d90-9527-83e868cdaddd
-function sample_trajectory_random(s_0,u_0,max_t,env::environment,occupancies = true)
+function sample_trajectory_random(s_0,u_0,max_t,env::environment,pars,occupancies = true)
 	xpositions = Any[]
 	ypositions = Any[]
 	u_states = Any[]
@@ -1276,12 +1994,12 @@ function sample_trajectory_random(s_0,u_0,max_t,env::environment,occupancies = t
 	deleteat!(unvisited_s_states,id_s)
 	deleteat!(unvisited_u_states,id_u)
 	for t in 1:max_t
-		actions_at_s,_ = adm_actions(s,u,env)
+		actions_at_s,_ = adm_actions(s,u,env,pars)
 		action = rand(actions_at_s)
 		#action = rand(actions)
 		s_p = transition_s(s,action,env)
 		u_p = transition_u(s,u,action,env)
-		s = s_p
+		s = s_p[1]
 		u = u_p
 		#If agent dies, terminate episode
 		if u == 1
@@ -1576,7 +2294,7 @@ end
 
 # ╔═╡ bd16a66c-9c2f-449c-a792-1073c54e990b
 begin
-	draw_environment([3],[3],[u_0],env1)
+	draw_environment([3],[3],[u_0],env1,params)
 	#savefig("arena.pdf")
 end
 
@@ -1584,6 +2302,29 @@ end
 begin
 	@bind max_t Select([50000 => "short episode", 1E5 => "long episode"], [1000])
 end
+
+# ╔═╡ 4f5d1b29-90a2-4b79-9ce0-30764e6d3350
+begin
+	_,_,_,q_xpos_fa,q_ypos_fa,_ = sample_trajectory_q([3,3],50,q_value_fa,0.45,max_t,env1,params_fa,false)
+end
+
+# ╔═╡ e1c59a22-fdd8-4edd-86d5-9efd9aca69a5
+states_KL_fa,_,_,_ = create_episode_KL(s_0,50,KL_value_fa,max_t,env1,params_fa,fd = true)
+
+# ╔═╡ 55fdc810-fb0c-4d63-8010-f65200bceb5d
+states_KL_va,_,_,_ = create_episode_KL(s_0,50,KL_value_va,max_t,env1,params)
+
+# ╔═╡ e3ff07ca-6c46-4be9-bf78-3c09bed248f6
+length(states_KL_va),length(states_KL_fa)
+
+# ╔═╡ d6d26401-22eb-4e8d-8b2a-13223167a949
+max_t
+
+# ╔═╡ 0a55db1e-4dc7-4195-aa2f-564d770afa8c
+states_AIF,us_AIF,actions_AIF,values_AIF = create_episode_AIF(s_0,50,v_AIF,max_t,env_AIF,p_AIF)
+
+# ╔═╡ f0cb716c-620b-4632-9022-f7b9880ac98e
+length(states_AIF),max_t_anim
 
 # ╔═╡ b17456b8-3d6a-4c31-95f2-036c5fd90ea3
 s_0,u_0,max_t
@@ -1659,11 +2400,12 @@ function many_episodes_histogram(s_0,u_0,h_value,q_value,ϵ,max_t,n_episodes,env
 	times_h = Any[]
 	times_q = Any[]
 	times_rand = Any[]
+	hs_u = Any[]
 	for j in 1:n_episodes
 		println("ep = ", j)
-		h_xpos,h_ypos,h_us,h_allx,h_ally,h_urgency,h_visited_s,h_visited_u,h_time = sample_trajectory(s_0,u_0,h_value,max_t,env1,params,false)
-		q_xpos,q_ypos,q_us,q_allx,q_ally,q_visited_s,q_visited_u,q_time = sample_trajectory_q(s_0,u_0,q_value,ϵ,max_t,env1,false)
-		rand_xpos,rand_ypos,rand_us,rand_allx,rand_ally,rand_visited_s,rand_visited_u,rand_time = sample_trajectory_random(s_0,u_0,max_t,env1,false)
+		h_xpos,h_ypos,h_us,h_allx,h_ally,h_urgency,h_visited_s,h_visited_u,h_time = sample_trajectory(s_0,u_0,h_value,max_t,env,params,false)
+		q_xpos,q_ypos,q_us,q_allx,q_ally,q_visited_s,q_visited_u,q_time = sample_trajectory_q(s_0,u_0,q_value,ϵ,max_t,env,params,false)
+		rand_xpos,rand_ypos,rand_us,rand_allx,rand_ally,rand_visited_s,rand_visited_u,rand_time = sample_trajectory_random(s_0,u_0,max_t,env,params,false)
 		push!(times_h,h_time)
 		push!(times_q,q_time)
 		push!(times_rand,rand_time)
@@ -1679,8 +2421,9 @@ function many_episodes_histogram(s_0,u_0,h_value,q_value,ϵ,max_t,n_episodes,env
 			push!(rand_x,rand_allx[i])
 			push!(rand_y,rand_ally[i])
 		end		
+		hs_u = h_us
 	end
-	hs_x,hs_y,qs_x,qs_y,rand_x,rand_y,times_h,times_q,times_rand
+	hs_x,hs_y,hs_u,qs_x,qs_y,rand_x,rand_y,times_h,times_q,times_rand
 end
 
 # ╔═╡ c842a822-462b-4849-86f1-3fc717c492c1
@@ -1690,18 +2433,17 @@ n_episodes_hist = 1
 begin
 	import Random
 	Random.seed!(11)
-	hs_x,hs_y,qs_x,qs_y,rand_x,rand_y,times_h,times_q,times_rand = many_episodes_histogram(s_0,u_0,h_value_50,q_value_50,ϵ,max_t,n_episodes_hist,env1,params)
+	hs_x,hs_y,hs_u,qs_x,qs_y,rand_x,rand_y,times_h,times_q,times_rand = many_episodes_histogram(s_0,u_0,h_value_50,q_value_50,ϵ,max_t,n_episodes_hist,env1,params)
 end
 
 # ╔═╡ a0729563-0b6d-4014-b8c7-9eb284a34606
 if movie
 	Random.seed!(2)
-	h_xpos_anim,h_ypos_anim,h_us_anim,h_allx_anim,h_ally_anim,h_urgency_anim = sample_trajectory(s_0,u_0,h_value,max_t_anim,env1)
 	anim_h = animation(h_xpos_anim,h_ypos_anim,h_us_anim,max_t_anim,env1,color = palette(:default)[1])
 end
 
 # ╔═╡ 11b5409c-9db8-4b34-a111-7a62fedd23be
-gif(anim_h, fps = 12, "hagent.gif")
+gif(anim_h, fps = 12)#, "hagent.gif")
 
 # ╔═╡ 787bbe73-6052-41e0-bc8c-955e4a884886
 if movie_q
@@ -1719,6 +2461,15 @@ anim_both = animation2(h_xpos_anim,h_ypos_anim,h_us_anim,q_xpos_anim,q_ypos_anim
 
 # ╔═╡ 293c129d-dba4-4b04-aa0a-66e1b570aad4
 gif(anim_both, fps = 10, "both_agents.gif")
+
+# ╔═╡ 01606177-e88b-453c-ae34-8b3f5755bb82
+begin
+	Random.seed!(11)
+	_,_,_,h_xpos_fa,h_ypos_fa,_= sample_trajectory([3,3],50,h_value_fa,max_t,env1,params_fa)
+end
+
+# ╔═╡ 4b5eaa5a-df95-4060-bb99-1e69ccaf8533
+h_xpos_fa
 
 # ╔═╡ d66ab0d0-249d-464b-92d7-a0493338b7d0
 begin
@@ -1742,11 +2493,41 @@ begin
 	#savefig("noisy_tv_problem_highgamma_beta0.3.pdf")
 end
 
+# ╔═╡ d3a2593d-0d55-470c-bff1-4d80714a6f3a
+begin
+	bins_MOP = (collect(1:env1.sizex),collect(1:env1.sizey),collect(1:env1.sizeu))
+	h_MOP = fit(Histogram, (hs_x,hs_y,hs_u), bins_MOP)
+	h_n_MOP = normalize(h_MOP,mode =:probability)
+	entropy_MOP = entropy(h_n_MOP.weights)
+end
+
+# ╔═╡ 188dc342-f0ae-4df1-adf6-bce3da9d5d76
+begin
+	plot(xlabel = "Horizon",ylabel = "Entropy (nats)")
+	plot!(horizons, (mean(entropies_AIF,dims = 2)),yerror = std(entropies_AIF,dims = 2)./(sqrt(length(entropies_AIF[1,:]))), label = "EFE agent",ylim = (0,10),linewidth = 2.5)
+	plot!(horizons,entropy_MOP.*ones(length(horizons)),label = "MOP agent")
+	savefig("AIF/entropies.pdf")
+end
+
+# ╔═╡ 9c32afb3-1ea2-4206-846b-e674c1aac929
+hs_u
+
 # ╔═╡ c71b27fd-4ecd-4643-8a2b-c5c5d3a9335a
 times_h,times_q,times_rand
 
 # ╔═╡ 567f6b5d-c67e-4a43-9699-5625f1cc21a4
 md"### Histogram of visited external states"
+
+# ╔═╡ c9cfab90-ce27-40a6-b257-ec17fbd2d348
+function plot_single_histogram(allx,ally,env;maxclim = 0.2,cbar = false)
+	p_hist = plot(ticks = false)#, title = "H agent")#,ylabel = "\$u_{max} = 50\$")
+	#Paint the whole arena 
+	heatmap!(p_hist,zeros(env.sizex,env.sizey))
+	#Draw obstacles
+	plot!(p_hist,env.obstaclesx,env.obstaclesy,bins = (collect(0.5:1:env.sizex + 0.5),collect(0.5:1:env.sizey + 0.5)), st = :histogram2d, color = "#464646",clim = (0,maxclim))
+	#Draw histogram
+	histogram2d!(p_hist,allx,ally, bins = (collect(0.5:1:env.sizex + 0.5),collect(0.5:1:env.sizey + 0.5)),normalize = :probability,clim = (0,maxclim),cbar = cbar)
+end
 
 # ╔═╡ c933c84c-f158-4626-850b-7f5a164ea4aa
 function plot_histogram(h_allx,h_ally,q_allx,q_ally,rand_allx,rand_ally,env1,t_hist = 500000,maxclim = 0.2)
@@ -1786,13 +2567,53 @@ function plot_histogram(h_allx,h_ally,q_allx,q_ally,rand_allx,rand_ally,env1,t_h
 	# p_q200_hist = plot(ticks = false)
 	# heatmap!(p_q200_hist,zeros(env1.sizex,env1.sizey))
 	# histogram2d!(p_q200_hist, q_allx_200,q_ally_200, bins = (collect(0.5:1:env1.sizex + 0.5),collect(0.5:1:env1.sizey + 0.5)),normalize = true,clim = (0,0.2))
-	plot(p_h_hist,p_q_hist,p_rand_hist, layout = Plots.grid(1, 3, widths=[0.3,0.3,0.4]),size = (1000,300),margin = 5Plots.mm)
+	p_h_hist,p_q_hist,p_rand_hist
 	end
+
+# ╔═╡ 69a5d51e-84dd-4d81-8f26-19d4eb8cc9bc
+begin
+	p_h_hist_fa2,p_KL_hist_fa2,p_KL_hist_va2 = plot_histogram(h_xpos_fa,h_ypos_fa,q_xpos_fa,q_ypos_fa,[states_KL_va[i][1] for i in 1:length(states_KL_va)],[states_KL_va[i][2] for i in 1:length(states_KL_va)],env1,max_t,0.03)
+	plot!(p_h_hist_fa2,title = "MOP, fixed actions")
+	plot!(p_KL_hist_fa2,title = "R, fixed actions")
+	plot!(p_KL_hist_va2,title = "KL, fixed or variable actions")
+	plot(p_h_hist_fa2,p_KL_hist_fa2,p_KL_hist_va2, layout = Plots.grid(1, 3, widths=[0.3,0.3,0.4]),size = (1000,300),margin = 5Plots.mm)
+	#savefig("locations_histogram_MOP_R_fixedactions.png") 
+end
+
+# ╔═╡ 0714bc63-22d9-4f7f-a2d7-b4292575e05c
+begin
+	p_h_hist_fa,p_KL_hist_va,p_KL_hist_fa = plot_histogram(h_xpos_fa,h_ypos_fa,[states_KL_va[i][1] for i in 1:length(states_KL_va)],[states_KL_va[i][2] for i in 1:length(states_KL_va)],[states_KL_fa[i][1] for i in 1:length(states_KL_fa)],[states_KL_fa[i][2] for i in 1:length(states_KL_fa)],env1,max_t,0.03)
+	plot!(p_h_hist_fa,title = "MOP, fixed actions")
+	plot!(p_KL_hist_fa,title = "KL, fixed actions everywhere")
+	plot!(p_KL_hist_va,title = "KL, fixed actions")
+	plot(p_h_hist_fa,p_KL_hist_fa2,p_KL_hist_va,p_KL_hist_fa, layout = Plots.grid(1, 4, widths=[0.22,0.22,0.22,0.34]),size = (1300,300),margin = 5Plots.mm)
+	#savefig("locations_histogram_MOP_R_KL.pdf") 
+end
 
 # ╔═╡ e671cb3e-2d1a-4196-9274-89d41ac323c8
 begin
-	plot_histogram(hs_x,hs_y,qs_x,qs_y,rand_x,rand_y,env1,max_t,0.015)
+	p_h_hist,p_q_hist,p_rand_hist=plot_histogram(hs_x,hs_y,qs_x,qs_y,rand_x,rand_y,env1,max_t,0.015)
+	plot(p_h_hist,p_q_hist,p_rand_hist, layout = Plots.grid(1, 3, widths=[0.3,0.3,0.4]),size = (1000,300),margin = 5Plots.mm)
 	#savefig("locations_histogram_threeagents_nepisodes_$(n_episodes_hist)_gain_$(food_gain).pdf") 
+end
+
+# ╔═╡ b703ecd5-79e5-4c4c-8e7a-4d96ffa9942d
+begin
+	p_h_hist2,p_q_hist2,p_AIF_hist = plot_histogram(hs_x,hs_y,[states_emp[i][1] for i in 1:length(states_emp)],[states_emp[i][2] for i in 1:length(states_emp)],[states_AIF[i][1] for i in 1:length(states_AIF)],[states_AIF[i][2] for i in 1:length(states_AIF)],env1,max_t,0.015)
+	plot!(p_h_hist2,title = "MOP")
+	plot!(p_q_hist2,title = "$(p_emp.n)-step MPOW")
+	plot!(p_AIF_hist,title = "H = $(p_AIF.H), \$\\lambda\$ = $(p_AIF.β) EFE")
+	plot(p_h_hist2,p_q_hist2,p_AIF_hist, layout = Plots.grid(1, 3, widths=[0.3,0.3,0.4]),size = (1000,300),margin = 5Plots.mm)
+	#savefig("locations_histogram_MOP_MPOW_AIF_nepisodes_$(n_episodes_hist)_gain_$(food_gain)_horizon_$(p_AIF.H)_beta_$(p_AIF.β).pdf") 
+end
+
+# ╔═╡ a372e0e5-7c03-4db5-b13f-700685d972d0
+md"## Comparison with empowerment"
+
+# ╔═╡ 9fa11207-16ae-45aa-b42c-95d7813817fa
+begin
+	plot_emp = plot_single_histogram([states_emp[i][1] for i in 1:length(states_emp)],[states_emp[i][2] for i in 1:length(states_emp)],env_emp,cbar = true,maxclim = 0.4)
+	plot(plot_emp,title = "$(p_emp.n)-step empowerment", size = (300,300),margins = 5Plots.mm)
 end
 
 # ╔═╡ b2918c10-ca06-4c1d-91c1-c17e4dd49c9d
@@ -1892,12 +2713,19 @@ end
 # ╔═╡ 1483bfe5-150d-40f5-b9dc-9488dcbc88b2
 md"### Histogram of visitation of internal states"
 
+# ╔═╡ e9e0c092-53c8-4fb0-b116-4849c2ff63c0
+begin
+	_,_,h_us,_,_,_,_,_,_ = sample_trajectory(s_0,u_0,h_value,max_t,env1,params,false)
+	_,_,q_us,_,_,_,_,_ = sample_trajectory_q(s_0,u_0,q_value,ϵ,max_t,env1,params,false)
+end
+
 # ╔═╡ d93ef435-c460-40cc-96e7-817e9eaace55
 begin
 	p_us = plot(xlim = (0,100), xlabel = "Internal energy", ylabel = "Probability",legend_foreground_color = nothing, margin = 4Plots.mm, majorgrid = false,size = (400,300),minorgrid = false)
 	bd = 1
-	plot!(p_us,h_us_50, label = "H agent", bandwidth = bd, st = :density,linewidth = 3)
-	plot!(p_us,q_us_50, label = "R agent", bandwidth = bd, st = :density,linewidth = 3)
+	plot!(p_us,h_us, label = "MOP agent", bandwidth = bd, st = :density,linewidth = 3)
+	plot!(p_us,q_us, label = "R agent", bandwidth = bd, st = :density,linewidth = 3)
+	plot!(p_us,us_emp, label = "E agent", bandwidth = bd, st = :density,linewidth = 3)
 	# plot!(p_us,h_us_50, label = "H agent", bins = collect(0:1:50), st = :stephist,normalized = :pdf, linewidth = 3)
 	# plot!(p_us,q_us_50, label = "Q agent", bins = collect(0:1:50), st = :stephist,normalized = :pdf, linewidth = 3)
 	#savefig("energies_histogram.pdf")
@@ -1913,15 +2741,17 @@ Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
 ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
 
 [compat]
-Distributions = "~0.25.79"
+Distributions = "~0.25.100"
 Parameters = "~0.12.3"
-Plots = "~1.36.6"
-PlutoUI = "~0.7.48"
-StatsPlots = "~0.15.4"
+Plots = "~1.39.0"
+PlutoUI = "~0.7.52"
+StatsBase = "~0.34.0"
+StatsPlots = "~0.15.6"
 ZipFile = "~0.10.1"
 """
 
@@ -1929,27 +2759,27 @@ ZipFile = "~0.10.1"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.8.0"
+julia_version = "1.8.5"
 manifest_format = "2.0"
-project_hash = "0faba512d5fe533db10cc88c2d308188b0cceb65"
+project_hash = "7ed3ab3e99a0889593c6cf6adf05ca2cc9e958f7"
 
 [[deps.AbstractFFTs]]
-deps = ["ChainRulesCore", "LinearAlgebra"]
-git-tree-sha1 = "69f7020bd72f069c219b5e8c236c1fa90d2cb409"
+deps = ["ChainRulesCore", "LinearAlgebra", "Test"]
+git-tree-sha1 = "d92ad398961a3ed262d8bf04a1a2b8340f915fef"
 uuid = "621f4979-c628-5d54-868e-fcf4e3e8185c"
-version = "1.2.1"
+version = "1.5.0"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
-git-tree-sha1 = "8eaf9f1b4921132a4cff3f36a1d9ba923b14a481"
+git-tree-sha1 = "91bd53c39b9cbfb5ef4b015e8b582d344532bd0a"
 uuid = "6e696c72-6542-2067-7265-42206c756150"
-version = "1.1.4"
+version = "1.2.0"
 
 [[deps.Adapt]]
-deps = ["LinearAlgebra"]
-git-tree-sha1 = "195c5505521008abea5aee4f96930717958eac6f"
+deps = ["LinearAlgebra", "Requires"]
+git-tree-sha1 = "76289dc51920fdc6e0013c872ba9551d54961c24"
 uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
-version = "3.4.0"
+version = "3.6.2"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -1991,7 +2821,7 @@ uuid = "6e34b625-4abd-537c-b88f-471c36dfa7a0"
 version = "1.0.8+0"
 
 [[deps.Cairo_jll]]
-deps = ["Artifacts", "Bzip2_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "LZO_jll", "Libdl", "Pixman_jll", "Pkg", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
+deps = ["Artifacts", "Bzip2_jll", "CompilerSupportLibraries_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "LZO_jll", "Libdl", "Pixman_jll", "Pkg", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
 git-tree-sha1 = "4b859a208b2397a7a623a03449e4636bdb17bcf2"
 uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
 version = "1.16.1+1"
@@ -2004,33 +2834,33 @@ version = "0.5.1"
 
 [[deps.ChainRulesCore]]
 deps = ["Compat", "LinearAlgebra", "SparseArrays"]
-git-tree-sha1 = "e7ff6cadf743c098e08fca25c91103ee4303c9bb"
+git-tree-sha1 = "e30f2f4e20f7f186dc36529910beaedc60cfa644"
 uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-version = "1.15.6"
+version = "1.16.0"
 
 [[deps.ChangesOfVariables]]
-deps = ["ChainRulesCore", "LinearAlgebra", "Test"]
-git-tree-sha1 = "38f7a08f19d8810338d4f5085211c7dfa5d5bdd8"
+deps = ["InverseFunctions", "LinearAlgebra", "Test"]
+git-tree-sha1 = "2fba81a302a7be671aefe194f0525ef231104e7f"
 uuid = "9e997f8a-9a97-42d5-a9f1-ce6bfc15e2c0"
-version = "0.1.4"
+version = "0.1.8"
 
 [[deps.Clustering]]
 deps = ["Distances", "LinearAlgebra", "NearestNeighbors", "Printf", "Random", "SparseArrays", "Statistics", "StatsBase"]
-git-tree-sha1 = "64df3da1d2a26f4de23871cd1b6482bb68092bd5"
+git-tree-sha1 = "b86ac2c5543660d238957dbde5ac04520ae977a7"
 uuid = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
-version = "0.14.3"
+version = "0.15.4"
 
 [[deps.CodecZlib]]
 deps = ["TranscodingStreams", "Zlib_jll"]
-git-tree-sha1 = "ded953804d019afa9a3f98981d99b33e3db7b6da"
+git-tree-sha1 = "02aa26a4cf76381be7f66e020a3eddeb27b0a092"
 uuid = "944b1d66-785c-5afd-91f1-9de20f533193"
-version = "0.7.0"
+version = "0.7.2"
 
 [[deps.ColorSchemes]]
-deps = ["ColorTypes", "ColorVectorSpace", "Colors", "FixedPointNumbers", "Random", "SnoopPrecompile"]
-git-tree-sha1 = "aa3edc8f8dea6cbfa176ee12f7c2fc82f0608ed3"
+deps = ["ColorTypes", "ColorVectorSpace", "Colors", "FixedPointNumbers", "PrecompileTools", "Random"]
+git-tree-sha1 = "67c1f244b991cad9b0aa4b7540fb758c2488b129"
 uuid = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
-version = "3.20.0"
+version = "3.24.0"
 
 [[deps.ColorTypes]]
 deps = ["FixedPointNumbers", "Random"]
@@ -2039,27 +2869,39 @@ uuid = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
 version = "0.11.4"
 
 [[deps.ColorVectorSpace]]
-deps = ["ColorTypes", "FixedPointNumbers", "LinearAlgebra", "SpecialFunctions", "Statistics", "TensorCore"]
-git-tree-sha1 = "d08c20eef1f2cbc6e60fd3612ac4340b89fea322"
+deps = ["ColorTypes", "FixedPointNumbers", "LinearAlgebra", "Requires", "Statistics", "TensorCore"]
+git-tree-sha1 = "a1f44953f2382ebb937d60dafbe2deea4bd23249"
 uuid = "c3611d14-8923-5661-9e6a-0046d554d3a4"
-version = "0.9.9"
+version = "0.10.0"
 
 [[deps.Colors]]
 deps = ["ColorTypes", "FixedPointNumbers", "Reexport"]
-git-tree-sha1 = "417b0ed7b8b838aa6ca0a87aadf1bb9eb111ce40"
+git-tree-sha1 = "fc08e5930ee9a4e03f84bfb5211cb54e7769758a"
 uuid = "5ae59095-9a9b-59fe-a467-6f913c188581"
-version = "0.12.8"
+version = "0.12.10"
 
 [[deps.Compat]]
 deps = ["Dates", "LinearAlgebra", "UUIDs"]
-git-tree-sha1 = "aaabba4ce1b7f8a9b34c015053d3b1edf60fa49c"
+git-tree-sha1 = "8a62af3e248a8c4bad6b32cbbe663ae02275e32c"
 uuid = "34da2185-b29b-5c13-b0c7-acf172513d20"
-version = "4.4.0"
+version = "4.10.0"
 
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "0.5.2+0"
+version = "1.0.1+0"
+
+[[deps.ConcurrentUtilities]]
+deps = ["Serialization", "Sockets"]
+git-tree-sha1 = "5372dbbf8f0bdb8c700db5367132925c0771ef7e"
+uuid = "f0e56b4a-5159-44fe-b623-3e5288b988bb"
+version = "2.2.1"
+
+[[deps.ConstructionBase]]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "c53fc348ca4d40d7b371e71fd52251839080cbc9"
+uuid = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
+version = "1.5.4"
 
 [[deps.Contour]]
 git-tree-sha1 = "d05d9e7b7aedff4e5b51a029dced05cfb6125781"
@@ -2067,26 +2909,20 @@ uuid = "d38c429a-6771-53c6-b99e-75d170b6e991"
 version = "0.6.2"
 
 [[deps.DataAPI]]
-git-tree-sha1 = "e08915633fcb3ea83bf9d6126292e5bc5c739922"
+git-tree-sha1 = "8da84edb865b0b5b0100c0666a9bc9a0b71c553c"
 uuid = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
-version = "1.13.0"
+version = "1.15.0"
 
 [[deps.DataStructures]]
 deps = ["Compat", "InteractiveUtils", "OrderedCollections"]
-git-tree-sha1 = "d1fff3a548102f48987a52a2e0d114fa97d730f0"
+git-tree-sha1 = "3dbd312d370723b6bb43ba9d02fc36abade4518d"
 uuid = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
-version = "0.18.13"
+version = "0.18.15"
 
 [[deps.DataValueInterfaces]]
 git-tree-sha1 = "bfc1187b79289637fa0ef6d4436ebdfe6905cbd6"
 uuid = "e2d170a0-9d28-54be-80f0-106bbe20a464"
 version = "1.0.0"
-
-[[deps.DataValues]]
-deps = ["DataValueInterfaces", "Dates"]
-git-tree-sha1 = "d88a19299eba280a6d062e135a43f00323ae70bf"
-uuid = "e7dc6d0d-1eca-5fa6-8ad6-5aecde8b7ea5"
-version = "0.4.13"
 
 [[deps.Dates]]
 deps = ["Printf"]
@@ -2104,25 +2940,25 @@ version = "0.4.0"
 
 [[deps.Distances]]
 deps = ["LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "3258d0659f812acde79e8a74b11f17ac06d0ca04"
+git-tree-sha1 = "b6def76ffad15143924a2199f72a5cd883a2e8a9"
 uuid = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
-version = "0.10.7"
+version = "0.10.9"
 
 [[deps.Distributed]]
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[deps.Distributions]]
-deps = ["ChainRulesCore", "DensityInterface", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "StatsBase", "StatsFuns", "Test"]
-git-tree-sha1 = "a7756d098cbabec6b3ac44f369f74915e8cfd70a"
+deps = ["ChainRulesCore", "DensityInterface", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns", "Test"]
+git-tree-sha1 = "938fe2981db009f531b6332e31c58e9584a2f9bd"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.79"
+version = "0.25.100"
 
 [[deps.DocStringExtensions]]
 deps = ["LibGit2"]
-git-tree-sha1 = "c36550cb29cbe373e95b3f40486b9a4148f89ffd"
+git-tree-sha1 = "2fb1e02f2b635d0845df5d7c167fec4dd739b00d"
 uuid = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
-version = "0.9.2"
+version = "0.9.3"
 
 [[deps.Downloads]]
 deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
@@ -2135,11 +2971,23 @@ git-tree-sha1 = "5837a837389fccf076445fce071c8ddaea35a566"
 uuid = "fa6b7ba4-c1ee-5f82-b5fc-ecf0adba8f74"
 version = "0.6.8"
 
+[[deps.EpollShim_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "8e9441ee83492030ace98f9789a654a6d0b1f643"
+uuid = "2702e6a9-849d-5ed8-8c21-79e8b8f9ee43"
+version = "0.0.20230411+0"
+
+[[deps.ExceptionUnwrapping]]
+deps = ["Test"]
+git-tree-sha1 = "e90caa41f5a86296e014e148ee061bd6c3edec96"
+uuid = "460bff9d-24e4-43bc-9d9f-a8973cb893f4"
+version = "0.1.9"
+
 [[deps.Expat_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "bad72f730e9e91c08d9427d5e8db95478a3c323d"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "4558ab818dcceaab612d1bb8c19cee87eda2b83c"
 uuid = "2e619515-83b5-522b-bb60-26c02a35a201"
-version = "2.4.8+0"
+version = "2.5.0+0"
 
 [[deps.FFMPEG]]
 deps = ["FFMPEG_jll"]
@@ -2155,9 +3003,9 @@ version = "4.4.2+2"
 
 [[deps.FFTW]]
 deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
-git-tree-sha1 = "90630efff0894f8142308e334473eba54c433549"
+git-tree-sha1 = "b4fbdd20c889804969571cc589900803edda16b7"
 uuid = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
-version = "1.5.0"
+version = "1.7.1"
 
 [[deps.FFTW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2170,9 +3018,9 @@ uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 
 [[deps.FillArrays]]
 deps = ["LinearAlgebra", "Random", "SparseArrays", "Statistics"]
-git-tree-sha1 = "802bfc139833d2ba893dd9e62ba1767c88d708ae"
+git-tree-sha1 = "a20eaa3ad64254c61eeb5f230d9306e937405434"
 uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
-version = "0.13.5"
+version = "1.6.1"
 
 [[deps.FixedPointNumbers]]
 deps = ["Statistics"]
@@ -2193,10 +3041,10 @@ uuid = "59287772-0a20-5a39-b81b-1366585eb4c0"
 version = "0.4.2"
 
 [[deps.FreeType2_jll]]
-deps = ["Artifacts", "Bzip2_jll", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "87eb71354d8ec1a96d4a7636bd57a7347dde3ef9"
+deps = ["Artifacts", "Bzip2_jll", "JLLWrappers", "Libdl", "Zlib_jll"]
+git-tree-sha1 = "d8db6a5a2fe1381c1ea4ef2cab7c69c2de7f9ea0"
 uuid = "d7e528f0-a631-5988-bf34-fe36492bcfd7"
-version = "2.10.4+0"
+version = "2.13.1+0"
 
 [[deps.FriBidi_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2212,15 +3060,15 @@ version = "3.3.8+0"
 
 [[deps.GR]]
 deps = ["Artifacts", "Base64", "DelimitedFiles", "Downloads", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Pkg", "Preferences", "Printf", "Random", "Serialization", "Sockets", "TOML", "Tar", "Test", "UUIDs", "p7zip_jll"]
-git-tree-sha1 = "051072ff2accc6e0e87b708ddee39b18aa04a0bc"
+git-tree-sha1 = "27442171f28c952804dede8ff72828a96f2bfc1f"
 uuid = "28b8d3ca-fb5f-59d9-8090-bfdbd6d07a71"
-version = "0.71.1"
+version = "0.72.10"
 
 [[deps.GR_jll]]
-deps = ["Artifacts", "Bzip2_jll", "Cairo_jll", "FFMPEG_jll", "Fontconfig_jll", "GLFW_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll", "Pixman_jll", "Pkg", "Qt5Base_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "501a4bf76fd679e7fcd678725d5072177392e756"
+deps = ["Artifacts", "Bzip2_jll", "Cairo_jll", "FFMPEG_jll", "Fontconfig_jll", "FreeType2_jll", "GLFW_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll", "Pixman_jll", "Qt6Base_jll", "Zlib_jll", "libpng_jll"]
+git-tree-sha1 = "025d171a2847f616becc0f84c8dc62fe18f0f6dd"
 uuid = "d2c73de3-f751-5644-a686-071e5b155ba9"
-version = "0.71.1+0"
+version = "0.72.10+0"
 
 [[deps.Gettext_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "XML2_jll"]
@@ -2229,10 +3077,10 @@ uuid = "78b55507-aeef-58d4-861c-77aaff3498b1"
 version = "0.21.0+0"
 
 [[deps.Glib_jll]]
-deps = ["Artifacts", "Gettext_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Libiconv_jll", "Libmount_jll", "PCRE2_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "fb83fbe02fe57f2c068013aa94bcdf6760d3a7a7"
+deps = ["Artifacts", "Gettext_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Libiconv_jll", "Libmount_jll", "PCRE2_jll", "Zlib_jll"]
+git-tree-sha1 = "e94c92c7bf4819685eb80186d51c43e71d4afa17"
 uuid = "7746bdde-850d-59dc-9ae8-88ece973131d"
-version = "2.74.0+1"
+version = "2.76.5+0"
 
 [[deps.Graphite2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2246,10 +3094,10 @@ uuid = "42e2da0e-8278-4e71-bc24-59509adca0fe"
 version = "1.0.2"
 
 [[deps.HTTP]]
-deps = ["Base64", "CodecZlib", "Dates", "IniFile", "Logging", "LoggingExtras", "MbedTLS", "NetworkOptions", "OpenSSL", "Random", "SimpleBufferStream", "Sockets", "URIs", "UUIDs"]
-git-tree-sha1 = "e1acc37ed078d99a714ed8376446f92a5535ca65"
+deps = ["Base64", "CodecZlib", "ConcurrentUtilities", "Dates", "ExceptionUnwrapping", "Logging", "LoggingExtras", "MbedTLS", "NetworkOptions", "OpenSSL", "Random", "SimpleBufferStream", "Sockets", "URIs", "UUIDs"]
+git-tree-sha1 = "5eab648309e2e060198b45820af1a37182de3cce"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "1.5.5"
+version = "1.10.0"
 
 [[deps.HarfBuzz_jll]]
 deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "Graphite2_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg"]
@@ -2258,10 +3106,10 @@ uuid = "2e76f6c2-a576-52d4-95c1-20adfe4de566"
 version = "2.8.1+1"
 
 [[deps.HypergeometricFunctions]]
-deps = ["DualNumbers", "LinearAlgebra", "OpenLibm_jll", "SpecialFunctions", "Test"]
-git-tree-sha1 = "709d864e3ed6e3545230601f94e11ebc65994641"
+deps = ["DualNumbers", "LinearAlgebra", "OpenLibm_jll", "SpecialFunctions"]
+git-tree-sha1 = "f218fe3736ddf977e0e772bc9a586b2383da2685"
 uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
-version = "0.3.11"
+version = "0.3.23"
 
 [[deps.Hyperscript]]
 deps = ["Test"]
@@ -2277,20 +3125,15 @@ version = "0.9.4"
 
 [[deps.IOCapture]]
 deps = ["Logging", "Random"]
-git-tree-sha1 = "f7be53659ab06ddc986428d3a9dcc95f6fa6705a"
+git-tree-sha1 = "d75853a0bdbfb1ac815478bacd89cd27b550ace6"
 uuid = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
-version = "0.2.2"
-
-[[deps.IniFile]]
-git-tree-sha1 = "f550e6e32074c939295eb5ea6de31849ac2c9625"
-uuid = "83e8ac13-25f8-5344-8a64-a9f2b223428f"
-version = "0.5.1"
+version = "0.2.3"
 
 [[deps.IntelOpenMP_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "d979e54b71da82f3a65b62553da4fc3d18c9004c"
+git-tree-sha1 = "ad37c091f7d7daf900963171600d7c1c5c3ede32"
 uuid = "1d5cc7b8-4909-519e-a0f8-d0f5ad9712d0"
-version = "2018.0.3+2"
+version = "2023.2.0+0"
 
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
@@ -2298,20 +3141,20 @@ uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 
 [[deps.Interpolations]]
 deps = ["Adapt", "AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "Requires", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
-git-tree-sha1 = "842dd89a6cb75e02e85fdd75c760cdc43f5d6863"
+git-tree-sha1 = "721ec2cf720536ad005cb38f50dbba7b02419a15"
 uuid = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
-version = "0.14.6"
+version = "0.14.7"
 
 [[deps.InverseFunctions]]
 deps = ["Test"]
-git-tree-sha1 = "49510dfcb407e572524ba94aeae2fced1f3feb0f"
+git-tree-sha1 = "68772f49f54b479fa88ace904f6127f0a3bb2e46"
 uuid = "3587e190-3f89-42d0-90ee-14403ec27112"
-version = "0.1.8"
+version = "0.1.12"
 
 [[deps.IrrationalConstants]]
-git-tree-sha1 = "7fd44fd4ff43fc60815f8e764c0f352b83c49151"
+git-tree-sha1 = "630b497eafcc20001bba38a4651b327dcfc491d2"
 uuid = "92d709cd-6900-40b7-9082-c6be49f344b6"
-version = "0.1.1"
+version = "0.2.2"
 
 [[deps.IteratorInterfaceExtensions]]
 git-tree-sha1 = "a3f24677c21f5bbe9d2a714f95dcd58337fb2856"
@@ -2325,28 +3168,28 @@ uuid = "1019f520-868f-41f5-a6de-eb00f4b6a39c"
 version = "0.1.5"
 
 [[deps.JLLWrappers]]
-deps = ["Preferences"]
-git-tree-sha1 = "abc9885a7ca2052a736a600f7fa66209f96506e1"
+deps = ["Artifacts", "Preferences"]
+git-tree-sha1 = "7e5d6779a1e09a36db2a7b6cff50942a0a7d0fca"
 uuid = "692b3bcd-3c85-4b1f-b108-f13ce0eb3210"
-version = "1.4.1"
+version = "1.5.0"
 
 [[deps.JSON]]
 deps = ["Dates", "Mmap", "Parsers", "Unicode"]
-git-tree-sha1 = "3c837543ddb02250ef42f4738347454f95079d4e"
+git-tree-sha1 = "31e996f0a15c7b280ba9f76636b3ff9e2ae58c9a"
 uuid = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
-version = "0.21.3"
+version = "0.21.4"
 
 [[deps.JpegTurbo_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "b53380851c6e6664204efb2e62cd24fa5c47e4ba"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "6f2675ef130a300a112286de91973805fcc5ffbc"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
-version = "2.1.2+0"
+version = "2.1.91+0"
 
 [[deps.KernelDensity]]
 deps = ["Distributions", "DocStringExtensions", "FFTW", "Interpolations", "StatsBase"]
-git-tree-sha1 = "9816b296736292a80b9a3200eb7fbb57aaa3917a"
+git-tree-sha1 = "90442c50e202a5cdf21a7899c66b240fdef14035"
 uuid = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
-version = "0.6.5"
+version = "0.6.7"
 
 [[deps.LAME_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2359,6 +3202,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "bf36f528eec6634efc60d7ec062008f171071434"
 uuid = "88015f11-f218-50d7-93a8-a6af411a945d"
 version = "3.0.0+1"
+
+[[deps.LLVMOpenMP_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "f689897ccbe049adb19a065c495e75f372ecd42b"
+uuid = "1d63c593-3942-5779-bab2-d838dc0a180e"
+version = "15.0.4+0"
 
 [[deps.LZO_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2373,9 +3222,9 @@ version = "1.3.0"
 
 [[deps.Latexify]]
 deps = ["Formatting", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdown", "OrderedCollections", "Printf", "Requires"]
-git-tree-sha1 = "ab9aa169d2160129beb241cb2750ca499b4e90e9"
+git-tree-sha1 = "f428ae552340899a935973270b8d98e5a31c49fe"
 uuid = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
-version = "0.15.17"
+version = "0.16.1"
 
 [[deps.LazyArtifacts]]
 deps = ["Artifacts", "Pkg"]
@@ -2428,10 +3277,10 @@ uuid = "7add5ba3-2f88-524e-9cd5-f83b8a55f7b8"
 version = "1.42.0+0"
 
 [[deps.Libiconv_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "42b62845d70a619f063a7da093d995ec8e15e778"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "f9557a255370125b405568f9767d6d195822a175"
 uuid = "94ce4f54-9a6c-5748-9c1c-f9c7231a4531"
-version = "1.16.1+1"
+version = "1.17.0+0"
 
 [[deps.Libmount_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2440,10 +3289,10 @@ uuid = "4b2f31a3-9ecc-558c-b454-b3730dcb73e9"
 version = "2.35.0+0"
 
 [[deps.Libtiff_jll]]
-deps = ["Artifacts", "JLLWrappers", "JpegTurbo_jll", "LERC_jll", "Libdl", "Pkg", "Zlib_jll", "Zstd_jll"]
-git-tree-sha1 = "3eb79b0ca5764d4799c06699573fd8f533259713"
+deps = ["Artifacts", "JLLWrappers", "JpegTurbo_jll", "LERC_jll", "Libdl", "XZ_jll", "Zlib_jll", "Zstd_jll"]
+git-tree-sha1 = "2da088d113af58221c52828a80378e16be7d037a"
 uuid = "89763e89-9b03-5906-acba-b20f662cd828"
-version = "4.4.0+0"
+version = "4.5.1+1"
 
 [[deps.Libuuid_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2457,18 +3306,18 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [[deps.LogExpFunctions]]
 deps = ["ChainRulesCore", "ChangesOfVariables", "DocStringExtensions", "InverseFunctions", "IrrationalConstants", "LinearAlgebra"]
-git-tree-sha1 = "946607f84feb96220f480e0422d3484c49c00239"
+git-tree-sha1 = "7d6dd4e9212aebaeed356de34ccf262a3cd415aa"
 uuid = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
-version = "0.3.19"
+version = "0.3.26"
 
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
 [[deps.LoggingExtras]]
 deps = ["Dates", "Logging"]
-git-tree-sha1 = "cedb76b37bc5a6c702ade66be44f831fa23c681e"
+git-tree-sha1 = "0d097476b6c381ab7906460ef1ef1638fbce1d91"
 uuid = "e6f89c97-d47a-5376-807f-9c37f3926c36"
-version = "1.0.0"
+version = "1.0.2"
 
 [[deps.MIMEs]]
 git-tree-sha1 = "65f28ad4b594aebe22157d6fac869786a255b7eb"
@@ -2477,15 +3326,15 @@ version = "0.1.4"
 
 [[deps.MKL_jll]]
 deps = ["Artifacts", "IntelOpenMP_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "Pkg"]
-git-tree-sha1 = "2ce8695e1e699b68702c03402672a69f54b8aca9"
+git-tree-sha1 = "eb006abbd7041c28e0d16260e50a24f8f9104913"
 uuid = "856f044c-d86e-5d09-b602-aeab76dc8ba7"
-version = "2022.2.0+0"
+version = "2023.2.0+0"
 
 [[deps.MacroTools]]
 deps = ["Markdown", "Random"]
-git-tree-sha1 = "42324d08725e200c23d4dfb549e0d5d89dede2d2"
+git-tree-sha1 = "9ee1618cbf5240e6d4e0371d6f24065083f60c48"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
-version = "0.5.10"
+version = "0.5.11"
 
 [[deps.Markdown]]
 deps = ["Base64"]
@@ -2509,9 +3358,9 @@ version = "0.3.2"
 
 [[deps.Missings]]
 deps = ["DataAPI"]
-git-tree-sha1 = "bf210ce90b6c9eed32d25dbcae1ebc565df2687f"
+git-tree-sha1 = "f66bdc5de519e8f8ae43bdc598782d35a25b1272"
 uuid = "e1d29d7a-bbdc-5cf2-9ac0-f12de2c33e28"
-version = "1.0.2"
+version = "1.1.0"
 
 [[deps.Mmap]]
 uuid = "a63ad114-7e13-5084-954f-fe012c677804"
@@ -2522,21 +3371,21 @@ version = "2022.2.1"
 
 [[deps.MultivariateStats]]
 deps = ["Arpack", "LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI", "StatsBase"]
-git-tree-sha1 = "efe9c8ecab7a6311d4b91568bd6c88897822fabe"
+git-tree-sha1 = "68bf5103e002c44adfd71fea6bd770b3f0586843"
 uuid = "6f286f6a-111f-5878-ab1e-185364afe411"
-version = "0.10.0"
+version = "0.10.2"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
-git-tree-sha1 = "a7c3d1da1189a1c2fe843a3bfa04d18d20eb3211"
+git-tree-sha1 = "0877504529a3e5c3343c6f8b4c0381e57e4387e4"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
-version = "1.0.1"
+version = "1.0.2"
 
 [[deps.NearestNeighbors]]
 deps = ["Distances", "StaticArrays"]
-git-tree-sha1 = "440165bf08bc500b8fe4a7be2dc83271a00c0716"
+git-tree-sha1 = "2c3726ceb3388917602169bed973dbc97f1b51a8"
 uuid = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
-version = "0.4.12"
+version = "0.4.13"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
@@ -2549,9 +3398,9 @@ version = "0.5.4"
 
 [[deps.OffsetArrays]]
 deps = ["Adapt"]
-git-tree-sha1 = "f71d8950b724e9ff6110fc948dff5a329f901d64"
+git-tree-sha1 = "2ac17d29c523ce1cd38e27785a7d23024853a4bb"
 uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
-version = "1.12.8"
+version = "1.12.10"
 
 [[deps.Ogg_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2571,15 +3420,15 @@ version = "0.8.1+0"
 
 [[deps.OpenSSL]]
 deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
-git-tree-sha1 = "df6830e37943c7aaa10023471ca47fb3065cc3c4"
+git-tree-sha1 = "51901a49222b09e3743c65b8847687ae5fc78eb2"
 uuid = "4d8831e6-92b7-49fb-bdf8-b643e874388c"
-version = "1.3.2"
+version = "1.4.1"
 
 [[deps.OpenSSL_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "f6e9dba33f9f2c44e08a020b0caf6903be540004"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "a12e56c72edee3ce6b96667745e6cbbe5498f200"
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
-version = "1.1.19+0"
+version = "1.1.23+0"
 
 [[deps.OpenSpecFun_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pkg"]
@@ -2594,9 +3443,9 @@ uuid = "91d4177d-7536-5919-b921-800302f37372"
 version = "1.3.2+0"
 
 [[deps.OrderedCollections]]
-git-tree-sha1 = "85f8e6578bf1f9ee0d11e7bb1b1456435479d47c"
+git-tree-sha1 = "2e73fe17cac3c62ad1aebe70d44c963c3cfdc3e3"
 uuid = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
-version = "1.4.1"
+version = "1.6.2"
 
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -2605,9 +3454,9 @@ version = "10.40.0+0"
 
 [[deps.PDMats]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
-git-tree-sha1 = "cf494dca75a69712a72b80bc48f59dcf3dea63ec"
+git-tree-sha1 = "bf6085e8bd7735e68c210c6e5d81f9a6fe192060"
 uuid = "90014a1f-27ba-587c-ab20-58faa44d9150"
-version = "0.11.16"
+version = "0.11.19"
 
 [[deps.Parameters]]
 deps = ["OrderedCollections", "UnPack"]
@@ -2616,10 +3465,10 @@ uuid = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 version = "0.12.3"
 
 [[deps.Parsers]]
-deps = ["Dates", "SnoopPrecompile"]
-git-tree-sha1 = "b64719e8b4504983c7fca6cc9db3ebc8acc2a4d6"
+deps = ["Dates", "PrecompileTools", "UUIDs"]
+git-tree-sha1 = "716e24b21538abc91f6205fd1d8363f39b442851"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
-version = "2.5.1"
+version = "2.7.2"
 
 [[deps.Pipe]]
 git-tree-sha1 = "6842804e7867b115ca9de748a0cf6b364523c16d"
@@ -2627,10 +3476,10 @@ uuid = "b98c9c47-44ae-5843-9183-064241ee97a0"
 version = "1.3.0"
 
 [[deps.Pixman_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "b4f5d02549a10e20780a24fce72bea96b6329e29"
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "LLVMOpenMP_jll", "Libdl"]
+git-tree-sha1 = "64779bc4c9784fee475689a1752ef4d5747c5e87"
 uuid = "30392449-352a-5448-841d-b1acce4e97dc"
-version = "0.40.1+0"
+version = "0.42.2+0"
 
 [[deps.Pkg]]
 deps = ["Artifacts", "Dates", "Downloads", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "REPL", "Random", "SHA", "Serialization", "TOML", "Tar", "UUIDs", "p7zip_jll"]
@@ -2644,44 +3493,50 @@ uuid = "ccf2f8ad-2431-5c83-bf29-c5338b663b6a"
 version = "3.1.0"
 
 [[deps.PlotUtils]]
-deps = ["ColorSchemes", "Colors", "Dates", "Printf", "Random", "Reexport", "SnoopPrecompile", "Statistics"]
-git-tree-sha1 = "21303256d239f6b484977314674aef4bb1fe4420"
+deps = ["ColorSchemes", "Colors", "Dates", "PrecompileTools", "Printf", "Random", "Reexport", "Statistics"]
+git-tree-sha1 = "f92e1315dadf8c46561fb9396e525f7200cdc227"
 uuid = "995b91a9-d308-5afd-9ec6-746e21dbc043"
-version = "1.3.1"
+version = "1.3.5"
 
 [[deps.Plots]]
-deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SnoopPrecompile", "SparseArrays", "Statistics", "StatsBase", "UUIDs", "UnicodeFun", "Unzip"]
-git-tree-sha1 = "6a9521b955b816aa500462951aa67f3e4467248a"
+deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "JLFzf", "JSON", "LaTeXStrings", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "Pkg", "PlotThemes", "PlotUtils", "PrecompileTools", "Preferences", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "RelocatableFolders", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "UUIDs", "UnicodeFun", "UnitfulLatexify", "Unzip"]
+git-tree-sha1 = "ccee59c6e48e6f2edf8a5b64dc817b6729f99eb5"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.36.6"
+version = "1.39.0"
 
 [[deps.PlutoUI]]
 deps = ["AbstractPlutoDingetjes", "Base64", "ColorTypes", "Dates", "FixedPointNumbers", "Hyperscript", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "MIMEs", "Markdown", "Random", "Reexport", "URIs", "UUIDs"]
-git-tree-sha1 = "efc140104e6d0ae3e7e30d56c98c4a927154d684"
+git-tree-sha1 = "e47cd150dbe0443c3a3651bc5b9cbd5576ab75b7"
 uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-version = "0.7.48"
+version = "0.7.52"
+
+[[deps.PrecompileTools]]
+deps = ["Preferences"]
+git-tree-sha1 = "03b4c25b43cb84cee5c90aa9b5ea0a78fd848d2f"
+uuid = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+version = "1.2.0"
 
 [[deps.Preferences]]
 deps = ["TOML"]
-git-tree-sha1 = "47e5f437cc0e7ef2ce8406ce1e7e24d44915f88d"
+git-tree-sha1 = "00805cd429dcb4870060ff49ef443486c262e38e"
 uuid = "21216c6a-2e73-6563-6e65-726566657250"
-version = "1.3.0"
+version = "1.4.1"
 
 [[deps.Printf]]
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 
-[[deps.Qt5Base_jll]]
-deps = ["Artifacts", "CompilerSupportLibraries_jll", "Fontconfig_jll", "Glib_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "OpenSSL_jll", "Pkg", "Xorg_libXext_jll", "Xorg_libxcb_jll", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_keysyms_jll", "Xorg_xcb_util_renderutil_jll", "Xorg_xcb_util_wm_jll", "Zlib_jll", "xkbcommon_jll"]
-git-tree-sha1 = "0c03844e2231e12fda4d0086fd7cbe4098ee8dc5"
-uuid = "ea2cea3b-5b76-57ae-a6ef-0a8af62496e1"
-version = "5.15.3+2"
+[[deps.Qt6Base_jll]]
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "Fontconfig_jll", "Glib_jll", "JLLWrappers", "Libdl", "Libglvnd_jll", "OpenSSL_jll", "Vulkan_Loader_jll", "Xorg_libSM_jll", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Xorg_libxcb_jll", "Xorg_xcb_util_cursor_jll", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_keysyms_jll", "Xorg_xcb_util_renderutil_jll", "Xorg_xcb_util_wm_jll", "Zlib_jll", "libinput_jll", "xkbcommon_jll"]
+git-tree-sha1 = "7c29f0e8c575428bd84dc3c72ece5178caa67336"
+uuid = "c0090381-4147-56d7-9ebc-da0b1113ec56"
+version = "6.5.2+2"
 
 [[deps.QuadGK]]
 deps = ["DataStructures", "LinearAlgebra"]
-git-tree-sha1 = "97aa253e65b784fd13e83774cadc95b38011d734"
+git-tree-sha1 = "9ebcd48c498668c7fa0e97a9cae873fbee7bfee1"
 uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
-version = "2.6.0"
+version = "2.9.1"
 
 [[deps.REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
@@ -2693,21 +3548,21 @@ uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [[deps.Ratios]]
 deps = ["Requires"]
-git-tree-sha1 = "dc84268fe0e3335a62e315a3a7cf2afa7178a734"
+git-tree-sha1 = "1342a47bf3260ee108163042310d26f2be5ec90b"
 uuid = "c84ed2f1-dad5-54f0-aa8e-dbefe2724439"
-version = "0.4.3"
+version = "0.4.5"
 
 [[deps.RecipesBase]]
-deps = ["SnoopPrecompile"]
-git-tree-sha1 = "d12e612bba40d189cead6ff857ddb67bd2e6a387"
+deps = ["PrecompileTools"]
+git-tree-sha1 = "5c3d09cc4f31f5fc6af001c250bf1278733100ff"
 uuid = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
-version = "1.3.1"
+version = "1.3.4"
 
 [[deps.RecipesPipeline]]
-deps = ["Dates", "NaNMath", "PlotUtils", "RecipesBase", "SnoopPrecompile"]
-git-tree-sha1 = "e974477be88cb5e3040009f3767611bc6357846f"
+deps = ["Dates", "NaNMath", "PlotUtils", "PrecompileTools", "RecipesBase"]
+git-tree-sha1 = "45cf9fd0ca5839d06ef333c8201714e888486342"
 uuid = "01d81517-befc-4cb6-b9ec-a95719d0359c"
-version = "0.6.11"
+version = "0.6.12"
 
 [[deps.Reexport]]
 git-tree-sha1 = "45e428421666073eab6f2da5c9d310d99bb12f9b"
@@ -2728,15 +3583,15 @@ version = "1.3.0"
 
 [[deps.Rmath]]
 deps = ["Random", "Rmath_jll"]
-git-tree-sha1 = "bf3188feca147ce108c76ad82c2792c57abe7b1f"
+git-tree-sha1 = "f65dcb5fa46aee0cf9ed6274ccbd597adc49aa7b"
 uuid = "79098fc4-a85e-5d69-aa6a-4863f24498fa"
-version = "0.7.0"
+version = "0.7.1"
 
 [[deps.Rmath_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "68db32dff12bb6127bac73c209881191bf0efbb7"
+git-tree-sha1 = "6ed52fdd3382cf21947b15e8870ac0ddbff736da"
 uuid = "f50d1b31-88e8-58de-be2c-1cc44531875f"
-version = "0.3.0+0"
+version = "0.4.0+0"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -2744,15 +3599,15 @@ version = "0.7.0"
 
 [[deps.Scratch]]
 deps = ["Dates"]
-git-tree-sha1 = "f94f779c94e58bf9ea243e77a37e16d9de9126bd"
+git-tree-sha1 = "30449ee12237627992a99d5e30ae63e4d78cd24a"
 uuid = "6c6a2e73-6563-6170-7368-637461726353"
-version = "1.1.1"
+version = "1.2.0"
 
 [[deps.SentinelArrays]]
 deps = ["Dates", "Random"]
-git-tree-sha1 = "efd23b378ea5f2db53a55ae53d3133de4e080aa9"
+git-tree-sha1 = "04bdff0b09c65ff3e06a05e3eb7b120223da3d39"
 uuid = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
-version = "1.3.16"
+version = "1.4.0"
 
 [[deps.Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
@@ -2772,19 +3627,14 @@ git-tree-sha1 = "874e8867b33a00e784c8a7e4b60afe9e037b74e1"
 uuid = "777ac1f9-54b0-4bf8-805c-2214025038e7"
 version = "1.1.0"
 
-[[deps.SnoopPrecompile]]
-git-tree-sha1 = "f604441450a3c0569830946e5b33b78c928e1a85"
-uuid = "66db9d55-30c0-4569-8b51-7e840670fc0c"
-version = "1.0.1"
-
 [[deps.Sockets]]
 uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [[deps.SortingAlgorithms]]
 deps = ["DataStructures"]
-git-tree-sha1 = "a4ada03f999bd01b3a25dcaa30b2d929fe537e00"
+git-tree-sha1 = "c60ec5c62180f27efea3ba2908480f8055e17cee"
 uuid = "a2af1166-a08f-5f64-846c-94a0d3cef48c"
-version = "1.1.0"
+version = "1.1.1"
 
 [[deps.SparseArrays]]
 deps = ["LinearAlgebra", "Random"]
@@ -2792,20 +3642,20 @@ uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [[deps.SpecialFunctions]]
 deps = ["ChainRulesCore", "IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
-git-tree-sha1 = "d75bda01f8c31ebb72df80a46c88b25d1c79c56d"
+git-tree-sha1 = "e2cfc4012a19088254b3950b85c3c1d8882d864d"
 uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
-version = "2.1.7"
+version = "2.3.1"
 
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "Random", "StaticArraysCore", "Statistics"]
-git-tree-sha1 = "4e051b85454b4e4f66e6a6b7bdc452ad9da3dcf6"
+git-tree-sha1 = "d5fb407ec3179063214bc6277712928ba78459e2"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.5.10"
+version = "1.6.4"
 
 [[deps.StaticArraysCore]]
-git-tree-sha1 = "6b7ba252635a5eff6a0b0664a41ee140a1c9e72a"
+git-tree-sha1 = "36b3d696ce6366023a0ea192b4cd442268995a0d"
 uuid = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
-version = "1.4.0"
+version = "1.4.2"
 
 [[deps.Statistics]]
 deps = ["LinearAlgebra", "SparseArrays"]
@@ -2813,27 +3663,27 @@ uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [[deps.StatsAPI]]
 deps = ["LinearAlgebra"]
-git-tree-sha1 = "f9af7f195fb13589dd2e2d57fdb401717d2eb1f6"
+git-tree-sha1 = "1ff449ad350c9c4cbc756624d6f8a8c3ef56d3ed"
 uuid = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
-version = "1.5.0"
+version = "1.7.0"
 
 [[deps.StatsBase]]
 deps = ["DataAPI", "DataStructures", "LinearAlgebra", "LogExpFunctions", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "d1bf48bfcc554a3761a133fe3a9bb01488e06916"
+git-tree-sha1 = "75ebe04c5bed70b91614d684259b661c9e6274a4"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.33.21"
+version = "0.34.0"
 
 [[deps.StatsFuns]]
 deps = ["ChainRulesCore", "HypergeometricFunctions", "InverseFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
-git-tree-sha1 = "5783b877201a82fc0014cbf381e7e6eb130473a4"
+git-tree-sha1 = "f625d686d5a88bcd2b15cd81f18f98186fdc0c9a"
 uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
-version = "1.0.1"
+version = "1.3.0"
 
 [[deps.StatsPlots]]
-deps = ["AbstractFFTs", "Clustering", "DataStructures", "DataValues", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "NaNMath", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
-git-tree-sha1 = "e0d5bc26226ab1b7648278169858adcfbd861780"
+deps = ["AbstractFFTs", "Clustering", "DataStructures", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "NaNMath", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
+git-tree-sha1 = "9115a29e6c2cf66cf213ccc17ffd61e27e743b24"
 uuid = "f3b207a7-027a-5e70-b257-86293d7955fd"
-version = "0.15.4"
+version = "0.15.6"
 
 [[deps.SuiteSparse]]
 deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
@@ -2857,15 +3707,15 @@ uuid = "3783bdb8-4a98-5b6b-af9a-565f29a5fe9c"
 version = "1.0.1"
 
 [[deps.Tables]]
-deps = ["DataAPI", "DataValueInterfaces", "IteratorInterfaceExtensions", "LinearAlgebra", "OrderedCollections", "TableTraits", "Test"]
-git-tree-sha1 = "c79322d36826aa2f4fd8ecfa96ddb47b174ac78d"
+deps = ["DataAPI", "DataValueInterfaces", "IteratorInterfaceExtensions", "LinearAlgebra", "OrderedCollections", "TableTraits"]
+git-tree-sha1 = "a1f34829d5ac0ef499f6d84428bd6b4c71f02ead"
 uuid = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
-version = "1.10.0"
+version = "1.11.0"
 
 [[deps.Tar]]
 deps = ["ArgTools", "SHA"]
 uuid = "a4e569a6-e804-4fa4-b0f3-eef7a1d5b13e"
-version = "1.10.0"
+version = "1.10.1"
 
 [[deps.TensorCore]]
 deps = ["LinearAlgebra"]
@@ -2879,19 +3729,19 @@ uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [[deps.TranscodingStreams]]
 deps = ["Random", "Test"]
-git-tree-sha1 = "8a75929dcd3c38611db2f8d08546decb514fcadf"
+git-tree-sha1 = "9a6ae7ed916312b41236fcef7e0af564ef934769"
 uuid = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
-version = "0.9.9"
+version = "0.9.13"
 
 [[deps.Tricks]]
-git-tree-sha1 = "6bac775f2d42a611cdfcd1fb217ee719630c4175"
+git-tree-sha1 = "aadb748be58b492045b4f56166b5188aa63ce549"
 uuid = "410a4b4d-49e4-4fbc-ab6d-cb71b17b3775"
-version = "0.1.6"
+version = "0.1.7"
 
 [[deps.URIs]]
-git-tree-sha1 = "ac00576f90d8a259f2c9d823e91d1de3fd44d348"
+git-tree-sha1 = "b7a5e99f24892b6824a954199a45e9ffcc1c70f0"
 uuid = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
-version = "1.4.1"
+version = "1.5.0"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]
@@ -2911,16 +3761,34 @@ git-tree-sha1 = "53915e50200959667e78a92a418594b428dffddf"
 uuid = "1cfade01-22cf-5700-b092-accc4b62d6e1"
 version = "0.4.1"
 
+[[deps.Unitful]]
+deps = ["ConstructionBase", "Dates", "InverseFunctions", "LinearAlgebra", "Random"]
+git-tree-sha1 = "a72d22c7e13fe2de562feda8645aa134712a87ee"
+uuid = "1986cc42-f94f-5a68-af5c-568840ba703d"
+version = "1.17.0"
+
+[[deps.UnitfulLatexify]]
+deps = ["LaTeXStrings", "Latexify", "Unitful"]
+git-tree-sha1 = "e2d817cc500e960fdbafcf988ac8436ba3208bfd"
+uuid = "45397f5d-5981-4c77-b2b3-fc36d6e9b728"
+version = "1.6.3"
+
 [[deps.Unzip]]
 git-tree-sha1 = "ca0969166a028236229f63514992fc073799bb78"
 uuid = "41fe7b60-77ed-43a1-b4f0-825fd5a5650d"
 version = "0.2.0"
 
+[[deps.Vulkan_Loader_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Wayland_jll", "Xorg_libX11_jll", "Xorg_libXrandr_jll", "xkbcommon_jll"]
+git-tree-sha1 = "2f0486047a07670caad3a81a075d2e518acc5c59"
+uuid = "a44049a8-05dd-5a78-86c9-5fde0876e88c"
+version = "1.3.243+0"
+
 [[deps.Wayland_jll]]
-deps = ["Artifacts", "Expat_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg", "XML2_jll"]
-git-tree-sha1 = "3e61f0b86f90dacb0bc0e73a0c5a83f6a8636e23"
+deps = ["Artifacts", "EpollShim_jll", "Expat_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg", "XML2_jll"]
+git-tree-sha1 = "7558e29847e99bc3f04d6569e82d0f5c54460703"
 uuid = "a2964d1f-97da-50d4-b82a-358c7fce9d89"
-version = "1.19.0+0"
+version = "1.21.0+1"
 
 [[deps.Wayland_protocols_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2941,10 +3809,10 @@ uuid = "efce3f68-66dc-5838-9240-27a6d6f5f9b6"
 version = "0.5.5"
 
 [[deps.XML2_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "58443b63fb7e465a8a7210828c91c08b92132dff"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Zlib_jll"]
+git-tree-sha1 = "04a51d15436a572301b5abbb9d099713327e9fc4"
 uuid = "02c8fc9c-b97f-50b9-bbe4-9be30ff0a78a"
-version = "2.9.14+0"
+version = "2.10.4+0"
 
 [[deps.XSLT_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libgcrypt_jll", "Libgpg_error_jll", "Libiconv_jll", "Pkg", "XML2_jll", "Zlib_jll"]
@@ -2952,17 +3820,35 @@ git-tree-sha1 = "91844873c4085240b95e795f692c4cec4d805f8a"
 uuid = "aed1982a-8fda-507f-9586-7b0439959a61"
 version = "1.1.34+0"
 
+[[deps.XZ_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "cf2c7de82431ca6f39250d2fc4aacd0daa1675c0"
+uuid = "ffd25f8a-64ca-5728-b0f7-c24cf3aae800"
+version = "5.4.4+0"
+
+[[deps.Xorg_libICE_jll]]
+deps = ["Libdl", "Pkg"]
+git-tree-sha1 = "e5becd4411063bdcac16be8b66fc2f9f6f1e8fe5"
+uuid = "f67eecfb-183a-506d-b269-f58e52b52d7c"
+version = "1.0.10+1"
+
+[[deps.Xorg_libSM_jll]]
+deps = ["Libdl", "Pkg", "Xorg_libICE_jll"]
+git-tree-sha1 = "4a9d9e4c180e1e8119b5ffc224a7b59d3a7f7e18"
+uuid = "c834827a-8449-5923-a945-d239c165b7dd"
+version = "1.2.3+0"
+
 [[deps.Xorg_libX11_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libxcb_jll", "Xorg_xtrans_jll"]
-git-tree-sha1 = "5be649d550f3f4b95308bf0183b82e2582876527"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxcb_jll", "Xorg_xtrans_jll"]
+git-tree-sha1 = "afead5aba5aa507ad5a3bf01f58f82c8d1403495"
 uuid = "4f6342f7-b3d2-589e-9d20-edeb45f2b2bc"
-version = "1.6.9+4"
+version = "1.8.6+0"
 
 [[deps.Xorg_libXau_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "4e490d5c960c314f33885790ed410ff3a94ce67e"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "6035850dcc70518ca32f012e46015b9beeda49d8"
 uuid = "0c0b7dd1-d40b-584c-a123-a41640f87eec"
-version = "1.0.9+4"
+version = "1.0.11+0"
 
 [[deps.Xorg_libXcursor_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libXfixes_jll", "Xorg_libXrender_jll"]
@@ -2971,10 +3857,10 @@ uuid = "935fb764-8cf2-53bf-bb30-45bb1f8bf724"
 version = "1.2.0+4"
 
 [[deps.Xorg_libXdmcp_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "4fe47bd2247248125c428978740e18a681372dd4"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "34d526d318358a859d7de23da945578e8e8727b7"
 uuid = "a3789734-cfe1-5b06-b2d0-1dd0d9d62d05"
-version = "1.1.3+4"
+version = "1.1.4+0"
 
 [[deps.Xorg_libXext_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libX11_jll"]
@@ -3013,22 +3899,28 @@ uuid = "ea2f1a96-1ddc-540d-b46f-429655e07cfa"
 version = "0.9.10+4"
 
 [[deps.Xorg_libpthread_stubs_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "6783737e45d3c59a4a4c4091f5f88cdcf0908cbb"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "8fdda4c692503d44d04a0603d9ac0982054635f9"
 uuid = "14d82f49-176c-5ed1-bb49-ad3f5cbd8c74"
-version = "0.1.0+3"
+version = "0.1.1+0"
 
 [[deps.Xorg_libxcb_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "XSLT_jll", "Xorg_libXau_jll", "Xorg_libXdmcp_jll", "Xorg_libpthread_stubs_jll"]
-git-tree-sha1 = "daf17f441228e7a3833846cd048892861cff16d6"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "XSLT_jll", "Xorg_libXau_jll", "Xorg_libXdmcp_jll", "Xorg_libpthread_stubs_jll"]
+git-tree-sha1 = "b4bfde5d5b652e22b9c790ad00af08b6d042b97d"
 uuid = "c7cfdc94-dc32-55de-ac96-5a1b8d977c5b"
-version = "1.13.0+3"
+version = "1.15.0+0"
 
 [[deps.Xorg_libxkbfile_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libX11_jll"]
-git-tree-sha1 = "926af861744212db0eb001d9e40b5d16292080b2"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libX11_jll"]
+git-tree-sha1 = "730eeca102434283c50ccf7d1ecdadf521a765a4"
 uuid = "cc61e674-0454-545c-8b26-ed2c68acab7a"
-version = "1.1.0+4"
+version = "1.1.2+0"
+
+[[deps.Xorg_xcb_util_cursor_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xcb_util_image_jll", "Xorg_xcb_util_jll", "Xorg_xcb_util_renderutil_jll"]
+git-tree-sha1 = "04341cb870f29dcd5e39055f895c39d016e18ccd"
+uuid = "e920d4aa-a673-5f3a-b3d7-f755a4d47c43"
+version = "0.1.4+0"
 
 [[deps.Xorg_xcb_util_image_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_xcb_util_jll"]
@@ -3061,22 +3953,22 @@ uuid = "c22f9ab0-d5fe-5066-847c-f4bb1cd4e361"
 version = "0.4.1+1"
 
 [[deps.Xorg_xkbcomp_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_libxkbfile_jll"]
-git-tree-sha1 = "4bcbf660f6c2e714f87e960a171b119d06ee163b"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_libxkbfile_jll"]
+git-tree-sha1 = "330f955bc41bb8f5270a369c473fc4a5a4e4d3cb"
 uuid = "35661453-b289-5fab-8a00-3d9160c6a3a4"
-version = "1.4.2+4"
+version = "1.4.6+0"
 
 [[deps.Xorg_xkeyboard_config_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Xorg_xkbcomp_jll"]
-git-tree-sha1 = "5c8424f8a67c3f2209646d4425f3d415fee5931d"
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Xorg_xkbcomp_jll"]
+git-tree-sha1 = "691634e5453ad362044e2ad653e79f3ee3bb98c3"
 uuid = "33bec58e-1273-512f-9401-5d533626f822"
-version = "2.27.0+4"
+version = "2.39.0+0"
 
 [[deps.Xorg_xtrans_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "79c31e7844f6ecf779705fbc12146eb190b7d845"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "e92a1a012a10506618f10b7047e478403a046c77"
 uuid = "c5fb5394-a638-5e4d-96e5-b29de1b5cf10"
-version = "1.4.0+3"
+version = "1.5.0+0"
 
 [[deps.ZipFile]]
 deps = ["Libdl", "Printf", "Zlib_jll"]
@@ -3090,16 +3982,28 @@ uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
 version = "1.2.12+3"
 
 [[deps.Zstd_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "e45044cd873ded54b6a5bac0eb5c971392cf1927"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "49ce682769cd5de6c72dcf1b94ed7790cd08974c"
 uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
-version = "1.5.2+0"
+version = "1.5.5+0"
+
+[[deps.eudev_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "gperf_jll"]
+git-tree-sha1 = "431b678a28ebb559d224c0b6b6d01afce87c51ba"
+uuid = "35ca27e7-8b34-5b7f-bca9-bdc33f59eb06"
+version = "3.2.9+0"
 
 [[deps.fzf_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "868e669ccb12ba16eaf50cb2957ee2ff61261c56"
 uuid = "214eeab7-80f7-51ab-84ad-2988db7cef09"
 version = "0.29.0+0"
+
+[[deps.gperf_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "3516a5630f741c9eecb3720b1ec9d8edc3ecc033"
+uuid = "1a1c6b14-54f6-533d-8383-74cd7377aa70"
+version = "3.1.1+0"
 
 [[deps.libaom_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -3118,11 +4022,23 @@ deps = ["Artifacts", "Libdl", "OpenBLAS_jll"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
 version = "5.1.1+0"
 
+[[deps.libevdev_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "141fe65dc3efabb0b1d5ba74e91f6ad26f84cc22"
+uuid = "2db6ffa8-e38f-5e21-84af-90c45d0032cc"
+version = "1.11.0+0"
+
 [[deps.libfdk_aac_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "daacc84a041563f965be61859a36e17c4e4fcd55"
 uuid = "f638f0a6-7fb0-5443-88ba-1cc74229b280"
 version = "2.0.2+0"
+
+[[deps.libinput_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "eudev_jll", "libevdev_jll", "mtdev_jll"]
+git-tree-sha1 = "ad50e5b90f222cfe78aa3d5183a20a12de1322ce"
+uuid = "36db933b-70db-51c0-b978-0f229ee0e533"
+version = "1.18.0+0"
 
 [[deps.libpng_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
@@ -3135,6 +4051,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Ogg_jll", "Pkg"]
 git-tree-sha1 = "b910cb81ef3fe6e78bf6acee440bda86fd6ae00c"
 uuid = "f27f6e37-5d2b-51aa-960f-b287f2bc3b7a"
 version = "1.3.7+1"
+
+[[deps.mtdev_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "814e154bdb7be91d78b6802843f76b6ece642f11"
+uuid = "009596ad-96f7-51b1-9f1b-5ce2d5e8a71e"
+version = "1.1.6+0"
 
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -3160,14 +4082,15 @@ version = "3.5.0+0"
 
 [[deps.xkbcommon_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Wayland_jll", "Wayland_protocols_jll", "Xorg_libxcb_jll", "Xorg_xkeyboard_config_jll"]
-git-tree-sha1 = "9ebfc140cc56e8c2156a15ceac2f0302e327ac0a"
+git-tree-sha1 = "9c304562909ab2bab0262639bd4f444d7bc2be37"
 uuid = "d8fb68d0-12a3-5cfd-a85a-d49703b185fd"
-version = "1.4.1+0"
+version = "1.4.1+1"
 """
 
 # ╔═╡ Cell order:
 # ╠═a649da15-0815-438d-9bef-02c6d204656e
 # ╠═25c56490-3b9c-4825-b91d-8b9e41fc0f6b
+# ╠═99246057-6b37-4d85-ae77-2a4210fac365
 # ╠═422493c5-8a90-4e70-bd06-40f8e6b254f1
 # ╠═76f77726-7776-4975-9f30-3887f13ae3e7
 # ╠═393eaf2d-e8fe-4675-a7e6-32d0fe9ac4e7
@@ -3178,12 +4101,13 @@ version = "1.4.1+0"
 # ╠═986f5441-9361-4074-a7f6-7affe650e555
 # ╟─194e91cb-b619-4908-aebd-3136107175b7
 # ╟─a46ced5b-2e58-40b2-8eb6-b4840043c055
-# ╟─9404080e-a52c-42f7-9abd-ea488bf7abc2
-# ╟─0dcdad0b-7acc-4fc4-93aa-f6eacc077cd3
-# ╟─0ce119b1-e269-41e2-80b7-991cae37cf5f
-# ╟─8675158f-97fb-4222-a32b-49ce4f6f1d41
+# ╠═9404080e-a52c-42f7-9abd-ea488bf7abc2
+# ╠═0dcdad0b-7acc-4fc4-93aa-f6eacc077cd3
+# ╠═0ce119b1-e269-41e2-80b7-991cae37cf5f
+# ╠═8675158f-97fb-4222-a32b-49ce4f6f1d41
+# ╠═ec119eb7-894c-4eb1-95ea-4b4dae9526c3
 # ╟─92bca36b-1dc9-4c03-88c0-6a684dfbec9f
-# ╟─c96e3331-1dcd-4b9c-b28d-d74493c8934d
+# ╠═c96e3331-1dcd-4b9c-b28d-d74493c8934d
 # ╟─d0a5c0fe-895f-42d8-9db6-3b0fcc6bb43e
 # ╠═155056b5-21ea-40d7-8cce-19fde5a1b150
 # ╟─6c716ad4-23c4-46f8-ba77-340029fcce87
@@ -3193,45 +4117,120 @@ version = "1.4.1+0"
 # ╠═bd16a66c-9c2f-449c-a792-1073c54e990b
 # ╟─ac3a4aa3-1edf-467e-9a47-9f6d6655cd04
 # ╟─c6870051-0241-4cef-9e5b-bc876a3894fa
+# ╠═a6fbddc0-7def-489e-9ad1-2e6a5e68eddd
 # ╠═d88e0e27-2354-43ad-9c26-cdc90beeea0f
 # ╟─184636e2-c87d-4a89-b231-ff4aef8424d5
 # ╠═82fbe5a0-34a5-44c7-bdcb-36d16f09ea7b
 # ╠═a11b198f-0a55-4529-b44c-270f37ef773a
-# ╠═e67db730-ca7c-4ef4-a2d2-7e001d5f7a79
 # ╠═73722c01-adee-4bfd-97b4-60f2ced23725
+# ╠═25e35560-5d80-4388-8002-fd29d0541b18
+# ╠═e67db730-ca7c-4ef4-a2d2-7e001d5f7a79
 # ╠═76f506dc-b21d-4e13-a8e8-9d1b3bd21b30
 # ╟─aa5e5bf6-6504-4c01-bb36-df0d7306f9de
 # ╟─ef9e78e2-d61f-4940-9e62-40c6d060353b
 # ╟─a4457d71-27dc-4c93-81ff-f21b2dfed41d
 # ╟─7ad00e90-3431-4e61-9a7f-efbc14d0724e
+# ╠═a12ae2fc-07d4-459e-8459-747ab12fdbd5
 # ╟─b072360a-6646-4d6d-90ea-716085c53f66
 # ╠═a0729563-0b6d-4014-b8c7-9eb284a34606
 # ╠═11b5409c-9db8-4b34-a111-7a62fedd23be
 # ╟─f98d6ea0-9d98-4940-907c-455397158f3b
-# ╠═5f4234f5-fc0e-4cdd-93ea-99b6463b2ba1
-# ╟─7a0173ac-240d-4f93-b413-45c6af0f4011
+# ╟─5f4234f5-fc0e-4cdd-93ea-99b6463b2ba1
+# ╠═7a0173ac-240d-4f93-b413-45c6af0f4011
 # ╠═27011f44-929a-4899-b822-539d270959e1
 # ╠═caadeb3b-0938-4559-8122-348c960a6eb1
 # ╠═29a4d235-8b03-4701-af89-cd289f212e7d
 # ╠═819c1be2-339f-4c37-b8a3-9d8cb6be6496
 # ╟─358bc5ca-c1f6-40f1-ba2d-7e8466531903
-# ╟─40d62df0-53bb-4b46-91b7-78ffd621a519
+# ╠═40d62df0-53bb-4b46-91b7-78ffd621a519
 # ╟─005720d3-5920-476b-9f96-39971f512452
-# ╟─2379dcc3-53cb-4fb6-b1e8-c851e36acd1f
+# ╠═2379dcc3-53cb-4fb6-b1e8-c851e36acd1f
 # ╟─6e7b6b2a-5489-4860-930e-47b7df014840
 # ╟─2ed5904d-03a3-4999-a949-415d0cf47328
 # ╠═787bbe73-6052-41e0-bc8c-955e4a884886
 # ╠═139c806d-3f52-4fb9-9fe8-c57259ed1b6f
-# ╟─6a29cc32-6abf-41c1-b6e3-f4cb33b76f46
+# ╠═6a29cc32-6abf-41c1-b6e3-f4cb33b76f46
 # ╠═a5f43388-9e45-497f-b0f8-7f2987b3102d
 # ╠═293c129d-dba4-4b04-aa0a-66e1b570aad4
+# ╟─ba9a241e-93b7-42fd-b790-d6010e2435bd
+# ╠═39b00e87-db6e-441f-8265-de75148d6519
+# ╠═a6e21529-00eb-40b8-9f40-b8b26171eaad
+# ╠═c8c70b3f-45d5-4d38-95af-85ae85d1233c
+# ╟─a14df073-5b27-4bdb-b4c8-03927909b12e
+# ╠═ad2855ee-ffc3-4910-a307-2e908b93706b
+# ╠═5b3bbb53-d5f7-462b-8425-c8c6c4ff3865
+# ╠═91826a58-ebd5-4e2f-8836-ad6cff22406e
+# ╠═828b1bcd-a093-463c-bb2f-4c1b5359939c
+# ╠═c7bc355d-d8dd-4b82-ac81-1b9a6d5f71e0
+# ╠═af848419-950a-4827-bc4e-fc3e8facd1a8
+# ╠═f405c26e-f911-4dea-9364-f751259acf43
+# ╠═cb3280eb-8453-4040-aac0-22c1dc93b9d9
+# ╠═01606177-e88b-453c-ae34-8b3f5755bb82
+# ╠═4f5d1b29-90a2-4b79-9ce0-30764e6d3350
+# ╠═4b5eaa5a-df95-4060-bb99-1e69ccaf8533
+# ╠═e1c59a22-fdd8-4edd-86d5-9efd9aca69a5
+# ╠═e3ff07ca-6c46-4be9-bf78-3c09bed248f6
+# ╠═55fdc810-fb0c-4d63-8010-f65200bceb5d
+# ╠═0714bc63-22d9-4f7f-a2d7-b4292575e05c
+# ╠═69a5d51e-84dd-4d81-8f26-19d4eb8cc9bc
+# ╟─7431c898-bbef-422e-af13-480d2e912d16
+# ╟─86685690-c31d-4b71-b070-43fdb18e48db
+# ╠═f2f45f6f-c973-4272-afa2-7077dd169790
+# ╠═0de63f0b-c545-445b-a0da-97ec75647598
+# ╠═c555b1ac-ed4f-4767-9680-0e7ef7ab758f
+# ╟─33df863c-bf8c-4624-9fd3-1d3a569a4f61
+# ╟─01aaed4b-e028-49c9-90b4-a6c4158929f1
+# ╠═49df9fba-22a8-48e9-8278-22ffdfc7765f
+# ╠═3dd47db4-2485-4833-8172-3fe7a3fe2214
+# ╟─e4dcc71c-4cc6-4b8f-88ad-7c2c18e5af02
+# ╠═4121c28e-010e-428a-8e9a-544231dc6c0b
+# ╠═1c5176b2-f7e0-4a9a-b07c-392840294aa0
+# ╟─e2da5d6b-4134-4bee-a93b-a153d19359cf
+# ╠═e46e0035-c649-485f-9e87-6f7231c0927a
+# ╠═b1737188-4e57-4d81-a1fa-b55e1621a7dc
+# ╠═73b6c6e3-0c3c-46d5-a109-1f512b6871ee
+# ╠═8ec4f121-410a-49c6-8ae5-f8e014757fc7
+# ╠═0a693ea2-9506-4217-86d7-514678c03104
+# ╠═118e6de3-b525-42e5-8c0c-654c525a4684
+# ╟─3014c91c-b705-42e1-9689-ebb1c357f8b2
+# ╠═49124160-32b0-4e09-904c-9547697cbfd1
+# ╠═521717ad-23b7-4bca-bc8d-a2387946e55d
+# ╠═d6d26401-22eb-4e8d-8b2a-13223167a949
+# ╠═d99990c1-1b0c-4d52-87a3-6b3bd363fde7
+# ╟─00025055-7ec0-486d-bb29-8e769e08fcc8
+# ╟─b7c66258-bb37-4660-9b22-783a50d4c6f8
+# ╟─4f6cdf92-0821-4d39-ae15-1844a4a29482
+# ╠═6edeefb3-186c-447a-b6e6-abab6a7d1c63
+# ╠═317fab4f-c0b0-4671-a653-1bc8cbbfabc4
+# ╠═29193a6f-737f-4efb-acaa-d16d2b8c3589
+# ╠═0137a63c-6beb-4aaa-a485-f4b5e08fab01
+# ╠═210ef48a-13b1-44b5-a4c6-c2084bafc778
+# ╠═0a55db1e-4dc7-4195-aa2f-564d770afa8c
+# ╠═38d916de-9068-4f37-9ace-81e115d731bc
+# ╠═f0cb716c-620b-4632-9022-f7b9880ac98e
+# ╠═6046a1ae-ec46-490c-baa7-1534f72c5ea9
+# ╠═9ec3d452-5cc0-447d-8965-9b487f39650a
+# ╠═51432185-5447-45a5-8734-f85ad54b5602
+# ╠═48ade83b-bd73-4570-9a14-590f6f846097
+# ╠═d51573c2-f8b8-4785-bc14-3f611a34a924
+# ╠═c515caee-858d-4e1f-b021-7dd5b8648549
+# ╠═df4ce514-884c-401a-85f3-02ec37444816
+# ╠═446c2897-8db9-452d-9d11-4cf7cc9bfa8a
+# ╠═89c24ce1-87ce-4145-b3e7-bc6da50b94bf
+# ╠═8dcb6536-3737-4d58-862e-094218874040
+# ╠═4d96f296-b22a-4243-b32e-7154d88a16d7
+# ╠═a8152784-c97f-4937-8791-166a411eee80
+# ╠═e9b5ab32-0899-4e3d-b1cb-c986ae82b12d
+# ╠═b8ce5e63-5f88-424f-8d78-0910b0f88762
+# ╠═a12232f3-0c6b-44c2-bcba-f150a1f39c88
+# ╠═188dc342-f0ae-4df1-adf6-bce3da9d5d76
+# ╠═b92cde2a-bc29-4417-8a88-0f527a1b790e
 # ╟─d801413b-adff-48f0-aa90-89a1af1c0d63
 # ╟─2581ecba-d9c1-4989-b718-4f559c870adb
 # ╠═93980ec8-f9d2-4637-945c-259715e3ef5d
-# ╟─a6fbddc0-7def-489e-9ad1-2e6a5e68eddd
 # ╟─0fdb6f27-479b-4b46-bea2-2b6158f3d1c7
 # ╟─164985f1-3dda-4ab1-b3d2-af827eace611
-# ╠═df146a19-b47b-49eb-993a-7233df3741aa
+# ╟─df146a19-b47b-49eb-993a-7233df3741aa
 # ╠═d30c86b5-61eb-4e79-a485-f0246cae4064
 # ╠═f5313ab6-e354-4a9e-837f-a03b09b08d1e
 # ╟─0beeaba3-e0a7-4975-8e50-0c72ca3df314
@@ -3248,11 +4247,11 @@ version = "1.4.1+0"
 # ╟─6ad087b7-c848-498b-beba-fbd5c4b0c4c4
 # ╠═867527c2-e09e-4486-ba06-99a83fda13c6
 # ╠═5bebc6e9-1bde-40f4-bac4-2f5ec05ab548
-# ╠═d2df50cb-d163-4c49-b940-35179b7148a5
+# ╟─d2df50cb-d163-4c49-b940-35179b7148a5
 # ╠═ffd1a342-c46e-4016-a24b-fc98e4498890
 # ╠═3fb25daf-c9af-4746-b8a6-91bc01e4d12b
 # ╠═9f11779e-c23e-41d3-a51d-eb88db85c7fd
-# ╟─a134c7d5-15e6-4a22-bc34-56a3155b88dd
+# ╠═a134c7d5-15e6-4a22-bc34-56a3155b88dd
 # ╠═f2275b68-335a-4383-9ad9-b2e47286f008
 # ╟─53e6d8b6-fe76-4b1a-b6e4-8c55fc58db7d
 # ╠═d66ab0d0-249d-464b-92d7-a0493338b7d0
@@ -3261,7 +4260,7 @@ version = "1.4.1+0"
 # ╠═20cba048-e6c8-42d3-ad15-8091a8fd9bfc
 # ╠═9b45f045-77d6-43c1-a7a0-5d4d5c7af480
 # ╟─e7578dbf-ac6c-414c-9e08-1ed9636177f7
-# ╟─6b3fb79f-be03-4d90-9527-83e868cdaddd
+# ╠═6b3fb79f-be03-4d90-9527-83e868cdaddd
 # ╟─5b1ba4f6-37a9-4e61-b6cc-3d495aa67c9d
 # ╟─a0dc952c-e733-41de-8d6e-458d66c3769a
 # ╠═b17456b8-3d6a-4c31-95f2-036c5fd90ea3
@@ -3302,13 +4301,19 @@ version = "1.4.1+0"
 # ╠═78a5caf6-eced-4783-b950-26563f632be2
 # ╠═4a868ec2-b636-4d5d-a248-0a4e0cca3668
 # ╠═6edb5b48-b590-492d-bd3e-6a4f549aae30
-# ╟─4c51afa2-e294-4922-9cae-d087582d771c
+# ╠═4c51afa2-e294-4922-9cae-d087582d771c
 # ╠═c842a822-462b-4849-86f1-3fc717c492c1
 # ╠═42423e46-2446-4cdd-84c1-fe824e5eb3c4
+# ╠═d3a2593d-0d55-470c-bff1-4d80714a6f3a
+# ╠═9c32afb3-1ea2-4206-846b-e674c1aac929
 # ╠═c71b27fd-4ecd-4643-8a2b-c5c5d3a9335a
 # ╟─567f6b5d-c67e-4a43-9699-5625f1cc21a4
-# ╠═c933c84c-f158-4626-850b-7f5a164ea4aa
+# ╟─c9cfab90-ce27-40a6-b257-ec17fbd2d348
+# ╟─c933c84c-f158-4626-850b-7f5a164ea4aa
 # ╠═e671cb3e-2d1a-4196-9274-89d41ac323c8
+# ╠═b703ecd5-79e5-4c4c-8e7a-4d96ffa9942d
+# ╟─a372e0e5-7c03-4db5-b13f-700685d972d0
+# ╠═9fa11207-16ae-45aa-b42c-95d7813817fa
 # ╟─b2918c10-ca06-4c1d-91c1-c17e4dd49c9d
 # ╟─3e8a7dbb-8dfa-44f8-beab-ea32f3d478b4
 # ╠═298d4faf-bca5-49a5-b0e8-9e0b3600e3ae
@@ -3317,6 +4322,7 @@ version = "1.4.1+0"
 # ╠═19b1a5c0-c5a8-45bc-8cf0-fc6f97ccff91
 # ╠═cda6ab20-3dbb-43eb-9ae3-71889cb3da88
 # ╟─1483bfe5-150d-40f5-b9dc-9488dcbc88b2
+# ╠═e9e0c092-53c8-4fb0-b116-4849c2ff63c0
 # ╠═d93ef435-c460-40cc-96e7-817e9eaace55
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
