@@ -970,7 +970,7 @@ end
 	n = 3 #n in n-step empowerment
 	tol = 1E-12
 	max_iter = 150
-	constant_actions = false
+	constant_actions = true
 end
 
 # ╔═╡ 0de63f0b-c545-445b-a0da-97ec75647598
@@ -1133,23 +1133,23 @@ function emp_episode(s_0,u_0,env,pars_emp;n_steps = 10)
 end
 
 # ╔═╡ e46e0035-c649-485f-9e87-6f7231c0927a
-# states_emp,us_emp, actions_emp,emp_emp = emp_episode([3,6],50,env_emp,p_emp,n_steps = 200)
+states_emp,us_emp, actions_emp,emp_emp = emp_episode([3,3],50,env_emp,p_emp,n_steps = 200)
 
 # ╔═╡ b1737188-4e57-4d81-a1fa-b55e1621a7dc
-# begin
-# 	writedlm("empowerment/11x11_states_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",[[states_emp[i],us_emp[i]] for i in 1:length(states_emp)])
-# 	writedlm("empowerment/11x11_actions_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",actions_emp)
-# 	writedlm("empowerment/11x11_empowerments_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",emp_emp)
-# end
+begin
+	writedlm("empowerment/11x11_states_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp)2.dat",[[states_emp[i],us_emp[i]] for i in 1:length(states_emp)])
+	writedlm("empowerment/11x11_actions_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",actions_emp)
+	writedlm("empowerment/11x11_empowerments_$(p_emp.n)_step_time_$(length(states_emp))_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat",emp_emp)
+end
 
 # ╔═╡ 73b6c6e3-0c3c-46d5-a109-1f512b6871ee
-states_emp_read = readdlm("empowerment/11x11_states_$(p_emp.n)_step_time_201_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp).dat")
+states_emp_read = readdlm("empowerment/11x11_states_$(p_emp.n)_step_time_201_const_actions_$(p_emp.constant_actions)_gain_$(food_gain_emp)2.dat")
 
 # ╔═╡ 8ec4f121-410a-49c6-8ae5-f8e014757fc7
-begin
-	states_emp = [[parse(Int,states_emp_read[i,1][2]),parse(Int,states_emp_read[i,1][2])] for i in 1:length(states_emp_read[:,1])]
-	us_emp = [states_emp_read[i,3] for i in 1:length(states_emp_read[:,1])]
-end
+# begin
+# 	states_emp = [[parse(Int,states_emp_read[i,1][2]),parse(Int,states_emp_read[i,1][2])] for i in 1:length(states_emp_read[:,1])]
+# 	us_emp = [states_emp_read[i,3] for i in 1:length(states_emp_read[:,1])]
+# end
 
 # ╔═╡ 8223270e-9853-4324-b9b4-8ba5e988a006
 md"Produce animation? $(@bind movie_emp CheckBox(default = false))"
@@ -2554,19 +2554,19 @@ end
 
 # ╔═╡ e671cb3e-2d1a-4196-9274-89d41ac323c8
 begin
-	p_h_hist,p_q_hist,p_rand_hist=plot_histogram(hs_x,hs_y,qs_x,qs_y,rand_x,rand_y,env1,max_t,0.015)
+	p_h_hist,p_q_hist,p_rand_hist=plot_histogram(hs_x,hs_y,qs_x,qs_y,rand_x,rand_y,env1,max_t,0.03)
 	plot(p_h_hist,p_q_hist,p_rand_hist, layout = Plots.grid(1, 3, widths=[0.3,0.3,0.4]),size = (1000,300),margin = 5Plots.mm)
-	#savefig("locations_histogram_threeagents_nepisodes_$(n_episodes_hist)_gain_$(food_gain).pdf") 
+	#savefig("MOP_R_random_gridworld.pdf") 
 end
 
 # ╔═╡ b703ecd5-79e5-4c4c-8e7a-4d96ffa9942d
 begin
-	p_h_hist2,p_q_hist2,p_AIF_hist = plot_histogram(hs_x,hs_y,[states_emp[i][1] for i in 1:length(states_emp)],[states_emp[i][2] for i in 1:length(states_emp)],[states_AIF[i][1] for i in 1:length(states_AIF)],[states_AIF[i][2] for i in 1:length(states_AIF)],env1,max_t,0.015)
+	p_h_hist2,p_q_hist2,p_AIF_hist = plot_histogram(hs_x,hs_y,[states_emp[i][1] for i in 1:length(states_emp)],[states_emp[i][2] for i in 1:length(states_emp)],[states_AIF[i][1] for i in 1:length(states_AIF)],[states_AIF[i][2] for i in 1:length(states_AIF)],env1,max_t,0.03)
 	plot!(p_h_hist2,title = "MOP")
 	plot!(p_q_hist2,title = "$(p_emp.n)-step MPOW")
 	plot!(p_AIF_hist,title = "H = $(p_AIF.H), \$\\lambda\$ = $(p_AIF.β) EFE")
 	plot(p_h_hist2,p_q_hist2,p_AIF_hist, layout = Plots.grid(1, 3, widths=[0.3,0.3,0.4]),size = (1000,300),margin = 5Plots.mm)
-	#savefig("locations_histogram_MOP_MPOW_AIF_nepisodes_$(n_episodes_hist)_gain_$(food_gain)_horizon_$(p_AIF.H)_beta_$(p_AIF.β).pdf") 
+	#savefig("MOP_MPOW_AIF_gridworld.pdf") 
 end
 
 # ╔═╡ a372e0e5-7c03-4db5-b13f-700685d972d0
